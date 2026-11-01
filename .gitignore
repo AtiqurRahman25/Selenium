@@ -11,5 +11,9 @@ venv/
 .venv/
 env/
 
-# Outputs
+# Outputs & Evidence
 output/
+screenshots/
+
+# Temporary & Lock files
+~$*
