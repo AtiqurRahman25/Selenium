@@ -1,3 +1,11 @@
+"""
+DMS-TC003	
+Document View in Pending Documents (Grid View)	
+"1. Go to https://ecmv6.robo2mation.com/dms/document/upload/standard_upload/filesave/pendingmetalist/
+2. Click on ""Grid View"" icon
+3. Click on ""view document"" icon (PDF, PNG, JPG, JPEG, SVG, GIF, MP3, MP4, DOC, DOCX, XLS, XLSX, CSV, PPT, PPTX, MSG, EML, TXT file)"	
+System should allow to view the document and if give user a message if preview not available
+"""
 import time
 
 from selenium import webdriver

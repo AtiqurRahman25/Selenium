@@ -1,3 +1,7 @@
+"""
+Shared helpers for all DMS test scripts (config from .env, login, Excel, screenshots).
+Keep this file in the same folder as the test scripts.
+"""
 import os
 from datetime import datetime
 
@@ -10,7 +14,7 @@ from selenium.webdriver.support import expected_conditions as EC
 load_dotenv()
 
 # ---------- config (from .env) ----------
-BASE_URL = os.getenv("BASE_URL", "https://ecmv6.robo2mation.com")
+BASE_URL = os.getenv("BASE_URL", "https://ecmv6.robo2mation.dev")
 USERNAME = os.getenv("DMS_USERNAME")
 PASSWORD = os.getenv("DMS_PASSWORD")
 EXCEL_PATH = os.getenv("EXCEL_PATH", r"D:\Selenium\robo2_test_cases\Robo2mation_26Q1_Sanity_Test_Case_Doc.xlsx")
@@ -37,6 +41,14 @@ def login(driver, wait):
     wait.until(EC.visibility_of_element_located(LOGIN_USER)).send_keys(USERNAME)
     driver.find_element(*LOGIN_PASS).send_keys(PASSWORD, Keys.ENTER)  # Enter = green arrow button
     wait.until(EC.invisibility_of_element_located(LOGIN_USER))
+
+
+def find_sample_file(ext):
+    """Return (file name, full path) of any file in SAMPLE_DIR ending with .<ext>, or None."""
+    for name in os.listdir(SAMPLE_DIR):
+        if name.lower().endswith("." + ext):
+            return name, os.path.abspath(os.path.join(SAMPLE_DIR, name))
+    return None
 
 
 def save_shot(driver, test_case_id, ext, result):

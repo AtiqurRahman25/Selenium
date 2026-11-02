@@ -1,3 +1,10 @@
+""""
+DMS-TC002	
+Document Attach	
+"1. Go to https://ecmv6.robo2mation.com/dms/document/upload/standard_upload/
+2. Attach documents (PDF, PNG, JPG, JPEG, SVG, GIF, MP3, MP4, DOC, DOCX, XLS, XLSX, CSV, PPT, PPTX, MSG, EML, TXT) less than 20 mb"	
+System should allow to attach documents (media or office file)
+"""
 import os
 from datetime import datetime
 
