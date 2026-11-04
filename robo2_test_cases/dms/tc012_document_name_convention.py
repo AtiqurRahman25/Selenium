@@ -1,7 +1,9 @@
 """
-DMS-TC012 - Document Name Convention
-Attach a document, select a doc-type that has a document name convention, fill the required meta-data
-(unique values), click Save. Expected: the document name is built from the meta-data as configured.
+DMS-TC012	Document Name Convention	
+"1. Go to https://ecmv6.robo2mation.com/dms/document/upload/standard_upload/filesave/pendingmetalist/
+2. Attach a document (image, media or office file), select doc-type (which has document name convention), give all required meta-data value & give unique value to unique field.
+3. Click on ""Save"" button"	
+Document name should be auto selected with the combination of meta data as per configuration
 """
 import re
 import time

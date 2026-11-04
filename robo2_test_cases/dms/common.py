@@ -512,8 +512,12 @@ def modal_text_input(driver):
 
 
 def attach_to_file_input(driver, wait, path):
-    """Send a file to the (hidden) file input that was added last, like the Attach Documents page does."""
-    inputs = driver.find_elements(*FILE_INPUT)
+    """Send a file to the (hidden) file input inside an open popup (if any) or the page's upload input."""
+    modal_inputs = driver.find_elements(By.XPATH, f"{MODAL}//input[@type='file']")
+    inputs = modal_inputs or [
+        i for i in driver.find_elements(*FILE_INPUT)
+        if i.get_attribute("id") != "signature_upload" and "swal2-file" not in (i.get_attribute("class") or "")
+    ]
     file_input = inputs[-1]
     driver.execute_script("arguments[0].style.display='block'; arguments[0].style.visibility='visible';", file_input)
     file_input.send_keys(path)
@@ -812,12 +816,13 @@ def switch_to_new_tab(driver, old_tabs):
 
 
 def open_document(driver, wait, name):
-    """Find the document with quick search and open it."""
+    """Find the document with quick search and open its full view in a new tab."""
     if not search_finds(driver, wait, name, tries=5):  # search can take a few seconds to index a new document
         raise SetupError(f"document '{name}' not found in quick search")
     old_tabs = driver.window_handles
-    xpath = f"//*[@id='search_result_list_group']//a[contains(., {xpath_text(name)})]"
-    click(driver, driver.find_element(By.XPATH, xpath))
+    row = driver.find_element(By.XPATH, f"//*[@id='search_result_list_group']//a[contains(., {xpath_text(name)})]")
+    open_btns = row.find_elements(By.CSS_SELECTOR, ".openInNew")
+    click(driver, open_btns[0] if open_btns else row)
     time.sleep(3)
     switch_to_new_tab(driver, old_tabs)
 
@@ -881,22 +886,56 @@ def explorer_has(driver, wait, doc_type, name):
 
 # ---------- related files / versions ----------
 def add_version(driver, wait, suffix="v2"):
-    """Open version history, click Add, attach a file, type the extended name part, click Save Changes."""
-    path = find_sample_file("pdf")[1]
-    click_label(driver, wait, "version history")
-    click_label(driver, wait, "add")
+    """Open version history, click Add, attach a file, type the extended name part, choose version, click Upload."""
+    _, path = unique_copy(find_sample_file("pdf")[1])
+    add_btns = driver.find_elements(By.CSS_SELECTOR, "#version-history-id button[data-type='version'], button[data-type='version']")
+    if add_btns:
+        click(driver, add_btns[0])
+    else:
+        click_label(driver, wait, "version history")
+        click_label(driver, wait, "add")
+    wait.until(EC.visibility_of_element_located((By.ID, "addVersion")))
     time.sleep(1)
     attach_to_file_input(driver, wait, path)
-    time.sleep(2)
-    extra = modal_text_input(driver)
-    if extra is not None:
-        extra.send_keys(suffix)
-    return do(driver, wait, "save changes")
+    time.sleep(1)
+    extra = driver.find_elements(By.ID, "file_name_extended_part")
+    box = extra[0] if extra and extra[0].is_displayed() else modal_text_input(driver)
+    if box is not None:
+        box.clear()
+        box.send_keys(suffix)
+    # Select a required version (e.g. Major 2.00) in the bootstrap-select dropdown if present.
+    driver.execute_script("""
+        var sel = document.getElementById('version');
+        if (sel && !sel.value) {
+            for (var i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value) { sel.value = sel.options[i].value; break; }
+            }
+            if (window.$ && $.fn.selectpicker) { $(sel).selectpicker('refresh'); }
+        }
+        var cmt = document.getElementById('vcomment');
+        if (cmt && !cmt.value.trim()) { cmt.value = 'Version upload'; }
+    """)
+    upload_btns = driver.find_elements(By.CSS_SELECTOR, "#addVersion button[data-type='uploadVersion']")
+    if upload_btns:
+        ok, msg = message_after(driver, lambda: click(driver, upload_btns[0]))
+    else:
+        ok, msg = do(driver, wait, "upload")
+    if ok:
+        time.sleep(3)  # the page reloads 1 second after uploading a new version
+    return ok, msg
 
 
 def show_versions(driver, wait, version_text):
-    """Make sure the version history is open (the version row has this text in its name)."""
-    if find_by_label(driver, version_text, slack=300) is None:
+    """Make sure the version history panel is expanded so the version rows are visible."""
+    panels = driver.find_elements(By.ID, "versionHistory")
+    if panels and not panels[0].is_displayed():
+        headers = driver.find_elements(By.CSS_SELECTOR, "#version-history-id .card-header")
+        if headers:
+            click(driver, headers[0])
+        else:
+            click_label(driver, wait, "version history")
+        time.sleep(2)
+    elif not panels and find_by_label(driver, version_text, slack=300) is None:
         click_label(driver, wait, "version history")
         time.sleep(2)
 
