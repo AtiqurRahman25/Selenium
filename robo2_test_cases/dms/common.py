@@ -111,6 +111,11 @@ FIELD_XPATH = (
 )
 
 
+def default_doc_type_terms():
+    """Return default document type search terms (compatible with tc011 helper)."""
+    return DOC_TYPE_SEARCH_TERMS
+
+
 class SetupError(Exception):
     """Raised when test data could not be prepared; nothing is written to Excel."""
 
@@ -441,6 +446,20 @@ def find_by_label(driver, label, root=None, slack=25):
             if visible(driver, "#requested_downloads"):
                 links = visible(driver, "#requested_downloads tbody a[href]")
                 return links[0] if links else None
+        if visible(driver, "#search_modal"):
+            rows = driver.find_elements(By.XPATH, f"//div[@id='search_modal']//tr[contains(., {xpath_text(label)})]")
+            for r in rows:
+                if r.is_displayed():
+                    open_icons = [
+                        el for el in r.find_elements(
+                            By.XPATH,
+                            ".//*[contains(@class, 'openInNew') or contains(@title, 'Open') or contains(@data-original-title, 'Open')] | "
+                            ".//td[last()]//*[self::a or self::button or self::i]"
+                        )
+                        if el.is_displayed()
+                    ]
+                    if open_icons:
+                        return open_icons[-1]
         three_dot = visible(driver, "#three-dot > li.dropdown > a")
         menu = driver.find_elements(By.CSS_SELECTOR, "#three-dot ul.dropdown-menu")
         if three_dot and menu:
@@ -600,6 +619,11 @@ def select2_options(driver, css=DOC_TYPE_OPTION):
         ]
     except StaleElementReferenceException:
         return []
+
+
+def real_doc_type_options(driver):
+    """Alias kept for backward compatibility with helper scripts."""
+    return select2_options(driver, DOC_TYPE_OPTION)
 
 
 def best_option_index(options, term):
@@ -1111,13 +1135,70 @@ def advanced_finds(driver, wait, name, **options):
 
 
 def explorer_has(driver, wait, doc_type, name):
-    """Open Explorer, select `doc_type`, and check whether `name` is listed."""
+    """Open Explorer, expand all jsTree folders via API, click doc_type, and verify name is listed."""
     driver.get(EXPLORER_URL)
+    time.sleep(2)
+    leaf = doc_type.strip("/").split("/")[-1]
+
     try:
-        click_label(driver, wait, doc_type)
+        driver.execute_script("""
+            if (window.$ && $.jstree) {
+                $('.jstree').each(function() {
+                    var tree = $(this).jstree(true);
+                    if (tree && tree.open_all) { tree.open_all(); }
+                });
+            }
+        """)
+        time.sleep(1.5)
     except Exception:
-        return False
-    return wait_text(driver, name, 6)
+        pass
+
+    anchors = driver.find_elements(
+        By.XPATH,
+        f"//a[contains(@class, 'jstree-anchor') and normalize-space(.)={xpath_text(leaf)}]"
+    )
+    if not anchors:
+        anchors = driver.find_elements(
+            By.XPATH,
+            f"//a[contains(@class, 'jstree-anchor') and contains(normalize-space(.), {xpath_text(leaf)} )]"
+        )
+    if anchors:
+        click(driver, anchors[0])
+        try:
+            ActionChains(driver).double_click(anchors[0]).perform()
+        except Exception:
+            pass
+    else:
+        try:
+            click_label(driver, wait, leaf)
+        except Exception:
+            return False
+
+    time.sleep(2.5)
+    if wait_text(driver, name, 5):
+        return True
+
+    table_filters = visible(driver, "input[type='search'], .dataTables_filter input")
+    if table_filters:
+        table_filters[0].clear()
+        table_filters[0].send_keys(name)
+        time.sleep(2)
+        if wait_text(driver, name, 4):
+            return True
+
+    for _ in range(5):
+        next_btns = [
+            b for b in visible(driver, ".pagination li:not(.disabled) a.next, .paginate_button.next:not(.disabled), #pagination button.next")
+            if b.is_enabled()
+        ]
+        if not next_btns:
+            break
+        click(driver, next_btns[0])
+        time.sleep(1.5)
+        if wait_text(driver, name, 3):
+            return True
+
+    return False
 
 
 # ---------- related files & versions ----------
@@ -1243,3 +1324,9 @@ def run(test_case_id, scenarios):
 
     write_result(test_case_id, actual, status)
     print(f"\n{test_case_id}: {status}")
+
+
+try:
+    import tc011_Multiple_Doc_Up_helper as h  # noqa: E402
+except ImportError:
+    pass
