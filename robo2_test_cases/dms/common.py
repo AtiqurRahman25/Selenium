@@ -146,7 +146,7 @@ DOC_TYPE_BOX = (By.CSS_SELECTOR, "span.select2-selection[aria-labelledby='select
 DOC_TYPE_RESULTS = "#select2-DocumentType-results"
 DOC_TYPE_SEARCH_BOX = (By.XPATH, "//ul[@id='select2-DocumentType-results']/ancestor::span[contains(@class, 'select2-dropdown')]//input[contains(@class, 'select2-search__field')]")
 DOC_TYPE_OPTION = DOC_TYPE_RESULTS + " li.select2-results__option"
-DOC_TYPE_SEARCH_TERMS = [os.getenv("DOC_TYPE")] if os.getenv("DOC_TYPE") else ["doc", "inv", "rep", "con", "ent", "ion", "ing"]
+DOC_TYPE_SEARCH_TERMS = [os.getenv("DOC_TYPE")] if os.getenv("DOC_TYPE") else ["1 FC Test updated/aa", "aa", "doc", "inv", "rep", "con", "ent", "ion", "ing"]
 METADATA_PANEL = (By.ID, "add_meta_data")
 UPLOAD_BTN = (By.ID, "submit_meta_data")
 MESSAGE_BOX = ".toast, .alert, .swal2-popup, [role='alert'], .snackbar, .Toastify__toast, .mat-snack-bar-container, .ant-message, .growl-animated, [data-notify], [data-growl='container']"
@@ -167,9 +167,11 @@ LOWER = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ-_', 'abcdefghijklmnopqrstuvw
 MODAL = "//div[contains(concat(' ', normalize-space(@class), ' '), ' modal ') and (contains(concat(' ', normalize-space(@class), ' '), ' in ') or contains(@class, 'show'))]"
 CLICKABLE = "self::a or self::button or self::i or self::span or self::li or self::label or self::td or self::div"
 
+
 def default_doc_type_terms():
     """Same search texts as tc011_Multiple_Doc_Up_helper (or DOC_TYPE from .env)."""
-    return [os.getenv("DOC_TYPE")] if os.getenv("DOC_TYPE") else ["doc", "inv", "rep", "con", "ent", "ion", "ing"]
+    return [os.getenv("DOC_TYPE")] if os.getenv("DOC_TYPE") else ["1 FC Test updated/aa", "aa", "doc", "inv", "rep", "con", "ent", "ion", "ing"]
+
 
 # the confirmation messages of the other pages use more words than "success"
 MORE_SUCCESS_WORDS = ["archived", "restored", "deleted", "created", "updated", "checked", "linked", "unlinked", "shared",
@@ -209,18 +211,26 @@ def popup_text(driver):
 def wait_for_message(driver, text_before, seconds=20):
     """Wait for a new success/error message. Returns (success, message)."""
     def new_message(d):
-        texts = [e.text.lower() for e in d.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
+        boxes = [e.text.strip() for e in d.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
                  if e.is_displayed() and e.text.strip()]
-        texts.append(body_text(d))
+        try:
+            saved = d.execute_script("return sessionStorage.getItem('__last_notify_msg') || '';")
+        except Exception:
+            saved = ""
+        if saved and saved not in boxes:
+            boxes.append(saved)
+        texts = [b.lower() for b in boxes] + [body_text(d)]
         for text in texts:
             for word in SUCCESS_WORDS + ERROR_WORDS:
                 if word in text and word not in text_before:
-                    return word
+                    return word, (boxes[0] if boxes else word)
         return None
-    word = WebDriverWait(driver, seconds).until(new_message)
-    boxes = [e.text.strip() for e in driver.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
-             if e.is_displayed() and e.text.strip()]
-    return word in SUCCESS_WORDS, boxes[0] if boxes else word
+    word, msg = WebDriverWait(driver, seconds).until(new_message)
+    try:
+        driver.execute_script("sessionStorage.removeItem('__last_notify_msg');")
+    except Exception:
+        pass
+    return word in SUCCESS_WORDS, msg
 
 
 def pending_row_icon(file_name):
@@ -251,12 +261,15 @@ def best_option_index(options, term):
     """Index of the option that is exactly the wanted doc-type. The search also matches the folder path, so the
     first result is often another doc-type. A term with '/' is matched against the full path (the title)."""
     wanted = term.strip().strip("/").lower()
+    leaf = wanted.split("/")[-1]
     if "/" in wanted:
         for i, o in enumerate(options):
-            if (o.get_attribute("title") or "").strip().strip("/").lower() == wanted:
+            title = (o.get_attribute("title") or o.text or "").strip().strip("/").lower()
+            if title == wanted or title.endswith(wanted):
                 return i
     for i, o in enumerate(options):
-        if o.text.strip().lower() == wanted.split("/")[-1]:
+        title = (o.get_attribute("title") or o.text or "").strip().strip("/").lower()
+        if title == leaf or title.split("/")[-1] == leaf:
             return i
     return 0
 
@@ -302,35 +315,74 @@ def select_document_type(driver, wait, terms=None):
 def fill_metadata_form(driver, wait, terms=None):
     """Select the document type and fill visible required metadata fields with unique values."""
     select_document_type(driver, wait, terms)
-    run_id = datetime.now().strftime("%H%M%S%f")
+    run_id = datetime.now().strftime("%H%M%S%f")[:8]
+    field_xpath = (
+        "following::*[(self::input or self::textarea or self::select) "
+        "and not(ancestor::*[contains(@class, 'bs-searchbox')]) "
+        "and not(contains(@class, 'select2-search__field'))][1]"
+    )
     for attempt in range(3):
         try:
             panel = driver.find_element(*METADATA_PANEL)
-            labels = panel.find_elements(By.XPATH, ".//label[contains(., '*')]")
+            labels = panel.find_elements(By.XPATH, ".//label")
             for i, label in enumerate(labels):
-                if "document type" in label.text.lower():
+                ltext = label.text.lower().strip()
+                if not ltext or any(k in ltext for k in ("document type", "share with", "file name", "tag")):
                     continue
+                is_required = "*" in label.text
                 try:
-                    field = label.find_element(By.XPATH, "following::*[self::input or self::textarea][1]")
+                    field = label.find_element(By.XPATH, field_xpath)
                 except NoSuchElementException:
                     continue
+
+                # 1. Handle <select> dropdowns via JS so no dropdown menu stays open covering the Upload button
+                if field.tag_name == "select":
+                    if not is_required:
+                        continue
+                    driver.execute_script("""
+                        var sel = arguments[0];
+                        if (!sel.value) {
+                            var valid = [];
+                            for (var i = 0; i < sel.options.length; i++) {
+                                var val = sel.options[i].value;
+                                var txt = (sel.options[i].text || '').trim().toLowerCase();
+                                if (val && !sel.options[i].disabled && txt !== 'none' && txt !== 'nothing selected') {
+                                    valid.push(sel.options[i]);
+                                }
+                            }
+                            if (sel.multiple && sel.getAttribute('data-parsley-unique_meta') === 'unique' && valid.length >= 4) {
+                                var shuffled = valid.slice().sort(function() { return Math.random() - 0.5; });
+                                var count = Math.min(valid.length, 4 + Math.floor(Math.random() * 3));
+                                for (var j = 0; j < count; j++) {
+                                    shuffled[j].selected = true;
+                                }
+                            } else if (valid.length > 0) {
+                                valid[0].selected = true;
+                                sel.value = valid[0].value;
+                            }
+                            if (window.$) {
+                                $(sel).trigger('change');
+                                if ($.fn.selectpicker) { $(sel).selectpicker('refresh'); }
+                            }
+                        }
+                    """, field)
+                    continue
+
                 if not field.is_displayed() or field.get_attribute("value"):
                     continue
+
+                # 2. Check if field requires digits/numbers (e.g. Parsley validation data-parsley-type="digits")
                 field_id = (field.get_attribute("id") or "").lower()
+                field_type = (field.get_attribute("type") or "").lower()
+                outer_html = (field.get_attribute("outerHTML") or "").lower()
+
                 if "date" in field_id or "expires" in field_id:
-                    field.send_keys(datetime.now().strftime("%Y-%m-%d"))
-                elif (field.get_attribute("type") or "").lower() == "number":
-                    field.send_keys(str(int(run_id[-6:]) + i + 1))
+                    if is_required:
+                        field.send_keys(datetime.now().strftime("%Y-%m-%d"))
+                elif field_type == "number" or any(w in outer_html for w in ("digits", "number", "integer", "numeric")):
+                    field.send_keys(str(int(run_id[-5:]) + i + 1))
                 else:
                     field.send_keys(f"AUTO_{run_id}_{i}")
-            # Required bootstrap-select dropdowns (for example Checker).
-            dropdowns = panel.find_elements(By.XPATH, ".//label[contains(., '*')]/following-sibling::div[contains(@class, 'bootstrap-select')][1]/button[contains(@class, 'bs-placeholder')]")
-            for button in dropdowns:
-                if button.is_displayed():
-                    driver.execute_script("arguments[0].click();", button)
-                    options = button.find_elements(By.XPATH, "../div[contains(@class, 'dropdown-menu')]//li[not(contains(@class, 'disabled'))]/a")
-                    if options:
-                        driver.execute_script("arguments[0].click();", options[0])
             return
         except StaleElementReferenceException:
             if attempt == 2:
@@ -364,6 +416,22 @@ def predicate(label, exact):
 
 def find_by_label(driver, label, root=None, slack=25):
     """First visible button / icon / link with this text, title or aria-label. Exact match first. Looks inside an open popup first."""
+    if root is None:
+        if label.lower() in ("save changes", "save"):
+            update_btns = [b for b in driver.find_elements(By.CSS_SELECTOR, "#editMeta button[data-type='updateMeta']") if b.is_displayed()]
+            if update_btns:
+                return update_btns[0]
+        three_dot = driver.find_elements(By.CSS_SELECTOR, "#three-dot > li.dropdown > a")
+        menu = driver.find_elements(By.CSS_SELECTOR, "#three-dot ul.dropdown-menu")
+        if three_dot and menu and three_dot[0].is_displayed():
+            items = menu[0].find_elements(By.XPATH, f".//a{predicate(label, False)}")
+            if items:
+                if not menu[0].is_displayed():
+                    click(driver, three_dot[0])
+                    time.sleep(0.5)
+                visible_items = [e for e in items if e.is_displayed()]
+                if visible_items:
+                    return visible_items[0]
     scopes = [None] if root is not None else [MODAL, ""]
     for scope in scopes:
         for exact in (True, False):
@@ -400,7 +468,10 @@ def click(driver, element):
 
 def click_label(driver, wait, label, slack=25):
     element = WebDriverWait(driver, 10).until(lambda d: find_by_label(d, label, slack=slack))
+    action = element.get_attribute("data-action") or ""
     click(driver, element)
+    if action == "editMeta":
+        time.sleep(2)  # #editMeta populates its fields after a 2.6s timer
     return element
 
 
@@ -532,6 +603,21 @@ def message_after(driver, action):
     """Run action() (a click...), then wait for the confirmation / error message. Returns (True/False, message)."""
     try:
         WebDriverWait(driver, 6).until(messages_gone)  # an old message can still be on the screen
+    except Exception:
+        pass
+    try:
+        driver.execute_script("""
+            sessionStorage.removeItem('__last_notify_msg');
+            if (typeof window.notify === 'function' && !window.__notify_wrapped) {
+                var orig = window.notify;
+                window.notify = function(title, message) {
+                    var full = [title, message].filter(Boolean).join(' ').trim();
+                    if (full) { sessionStorage.setItem('__last_notify_msg', full); }
+                    return orig.apply(this, arguments);
+                };
+                window.__notify_wrapped = true;
+            }
+        """)
     except Exception:
         pass
     text_before = body_text(driver)
@@ -703,7 +789,7 @@ def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True):
                 pick_option(driver, "checker", os.getenv("CHECKER_NAME"))
         else:
             select_document_type(driver, wait, terms)
-            time.sleep(2)  # the meta-data fields of the document type are added after it is selected  # the meta-data fields of the document type are added after it is selected
+            time.sleep(2)  # the meta-data fields of the document type are added after it is selected
     except SetupError:
         raise
     except Exception as error:
@@ -778,7 +864,7 @@ def upload_document(driver, wait, ext="pdf", doc_type=None, share=None):
             info["shared_with"] = select_share(driver, share)
         info["name"] = set_document_name(driver, datetime.now().strftime("AUTO_%H%M%S"))
         text_before = body_text(driver)
-        driver.find_element(*UPLOAD_BTN).click()
+        click(driver, driver.find_element(*UPLOAD_BTN))
         ok, message = wait_for_message(driver, text_before)
     except SetupError:
         raise
@@ -827,9 +913,9 @@ def open_document(driver, wait, name):
     switch_to_new_tab(driver, old_tabs)
 
 
-def new_document(driver, wait, ext="pdf"):
+def new_document(driver, wait, ext="pdf", doc_type="1 FC Test updated/aa"):
     """Upload a fresh test document and open it. Returns the upload info."""
-    info = upload_document(driver, wait, ext)
+    info = upload_document(driver, wait, ext, doc_type=doc_type)
     open_document(driver, wait, info["name"])
     return info
 
@@ -1009,7 +1095,7 @@ def run(test_case_id, scenarios):
     Each function(driver, wait) returns (True/False, message)."""
     check_excel_ready(test_case_id)
 
-# Add extra success words without reassigning the global list.
+    # Add extra success words without reassigning the global list.
     for word in MORE_SUCCESS_WORDS:
         if word not in SUCCESS_WORDS:
             SUCCESS_WORDS.append(word)
