@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import time
+import traceback  # NEW: used by short() to say where an empty-message error happened
 import uuid
 from collections import Counter
 from datetime import datetime
@@ -199,7 +200,19 @@ def body_text(driver):
 
 
 def short(error):
-    return f"{type(error).__name__}: {str(error).splitlines()[0][:120]}"
+    """Short text of an error. CHANGED: when the error has no message (a Selenium TimeoutException has none), say which
+    of our functions it happened in, so the Excel remark / console shows where to look."""
+    lines = str(error).splitlines()
+    first = lines[0].strip()[:120] if lines else ""
+    if not first:
+        try:
+            frames = [f for f in traceback.extract_tb(error.__traceback__)
+                      if "site-packages" not in f.filename and f.name not in ("run", "<module>", "<lambda>")]
+            if frames:
+                first = "no message, happened in " + " > ".join(f.name for f in frames) + f" (line {frames[-1].lineno})"
+        except Exception:
+            pass
+    return f"{type(error).__name__}: {first}"
 
 
 def popup_text(driver):
@@ -1052,15 +1065,49 @@ def need_env(name, hint=""):
     return value
 
 
+def login_page_shown(driver, seconds=5):
+    """NEW: True if the login box (username field) is visible within a few seconds."""
+    try:
+        WebDriverWait(driver, seconds).until(EC.visibility_of_element_located(LOGIN_USER))
+        return True
+    except Exception:
+        return False
+
+
+def clear_session(driver):
+    """NEW: forget the sign-in completely (cookies + browser storage of this site)."""
+    try:
+        driver.delete_all_cookies()
+    except Exception:
+        pass
+    try:
+        driver.execute_script("window.localStorage.clear(); window.sessionStorage.clear();")
+    except Exception:
+        pass
+
+
 def login_as(driver, wait, username, password):
+    """CHANGED: if somebody is still signed in (no login box), sign out completely first. A wrong user/password now
+    gives a clear SetupError instead of an empty TimeoutException."""
     driver.get(BASE_URL)
+    if not login_page_shown(driver, 5):
+        clear_session(driver)
+        driver.get(BASE_URL)
     wait.until(EC.visibility_of_element_located(LOGIN_USER)).send_keys(username)
     driver.find_element(*LOGIN_PASS).send_keys(password, Keys.ENTER)
-    wait.until(EC.invisibility_of_element_located(LOGIN_USER))
+    try:
+        wait.until(EC.invisibility_of_element_located(LOGIN_USER))
+    except Exception:
+        raise SetupError(f"login as '{username}' did not work (still on the login page). Check the user name and password in .env. "
+                         f"Page said: {popup_text(driver) or 'nothing'}")
 
 
 def logout(driver):
+    """CHANGED: after the logout URL, check that the login page really shows; if not, clear the session by hand."""
     driver.get(BASE_URL + "/login/logout/")
+    if not login_page_shown(driver, 5):
+        clear_session(driver)
+        driver.get(BASE_URL)
 
 
 def as_other_user(driver, wait, function):
