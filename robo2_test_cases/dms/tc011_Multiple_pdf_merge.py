@@ -1,12 +1,9 @@
 """
-DMS-TC011 - Multiple Doc Upload Together (Document Merge)
-Expected result: only PDF documents should be merged.
-
-Scenario 1: attach 2 PDFs together, upload them, check the confirmation message.
-Scenario 2: try to select 2 images together, check that the page does not allow it.
-
-Needs in SAMPLE_DIR: at least 2 PDF files and 2 image files (png, jpg or jpeg).
-Run:  python dms_04_multiple_upload_merge.py
+DMS-TC011	Multiple Doc Upload Together (Document Merge)	
+"1. Go to https://ecmv6.robo2mation.com/dms/document/upload/standard_upload/filesave/pendingmetalist/
+2. Attach 2 or more documents (image, or pdf) of similar type together
+3. Click on ""Save"" button
+Only PDF documents should be marged
 """
 import os
 import time

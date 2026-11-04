@@ -1,15 +1,26 @@
 """
-Shared helpers for all DMS test scripts (config from .env, login, Excel, screenshots).
+Shared helpers for all DMS test scripts (config from .env, login, Excel, screenshots,
+open a document, click by label, popups, messages, second user, run a test case).
 Keep this file in the same folder as the test scripts.
 """
 import os
+import re
+import shutil
+import time
+import uuid
+from collections import Counter
 from datetime import datetime
 
 import openpyxl
 from dotenv import load_dotenv
+from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+from selenium.webdriver import ActionChains
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import Select, WebDriverWait
 
 load_dotenv()
 
@@ -114,3 +125,893 @@ def write_result(test_case_id, actual, status):
         if col:
             cell = check.cell(row, col)
             print(f"  {cell.coordinate} [{check.cell(HEADER_ROW, col).value}] = {cell.value!r}")
+
+
+# ---------- pages ----------
+EXPLORER_URL = BASE_URL + "/dms/document/explorer/"
+ROOT_URL = BASE_URL + "/dms/document/root"
+DELETED_ROOT_URL = BASE_URL + "/dms/document/deleted-root"
+RESTORE_URL = BASE_URL + "/dms/restore/"
+CHECKOUT_URL = BASE_URL + "/dms/document/checkout/"
+SHARED_URL = BASE_URL + "/dms/document/share/"
+BULK_URL = BASE_URL + "/dms/document/upload/bulk-upload/"
+REVIEW_URL = BASE_URL + "/dms/document/pending-for-review/"
+MASTER_TABLE_URL = BASE_URL + "/dms/document/settings/master-table-method/"
+
+# ---------- standard document-upload page ----------
+ATTACH_URL = BASE_URL + "/dms/document/upload/standard_upload/"
+PENDING_URL = BASE_URL + "/dms/document/upload/standard_upload/filesave/pendingmetalist/"
+FILE_INPUT = (By.CSS_SELECTOR, "input[type='file']")
+DOC_TYPE_BOX = (By.CSS_SELECTOR, "span.select2-selection[aria-labelledby='select2-DocumentType-container']")
+DOC_TYPE_RESULTS = "#select2-DocumentType-results"
+DOC_TYPE_SEARCH_BOX = (By.XPATH, "//ul[@id='select2-DocumentType-results']/ancestor::span[contains(@class, 'select2-dropdown')]//input[contains(@class, 'select2-search__field')]")
+DOC_TYPE_OPTION = DOC_TYPE_RESULTS + " li.select2-results__option"
+DOC_TYPE_SEARCH_TERMS = [os.getenv("DOC_TYPE")] if os.getenv("DOC_TYPE") else ["doc", "inv", "rep", "con", "ent", "ion", "ing"]
+METADATA_PANEL = (By.ID, "add_meta_data")
+UPLOAD_BTN = (By.ID, "submit_meta_data")
+MESSAGE_BOX = ".toast, .alert, .swal2-popup, [role='alert'], .snackbar, .Toastify__toast, .mat-snack-bar-container, .ant-message, .growl-animated, [data-notify], [data-growl='container']"
+SUCCESS_WORDS = ["success", "uploaded", "saved"]
+ERROR_WORDS = ["error", "failed", "required", "already exists", "invalid"]
+
+# ---------- config (from .env) ----------
+OTHER_USERNAME = os.getenv("OTHER_USERNAME")  # a second, permitted general user
+OTHER_PASSWORD = os.getenv("OTHER_PASSWORD")
+DOWNLOAD_DIR = os.path.abspath(os.getenv("DOWNLOAD_DIR", "downloads"))
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# ---------- locators (taken from the page HTML) ----------
+SEARCH_BOX = (By.ID, "search_text")  # quick search in the top bar
+SEARCH_RESULTS = (By.ID, "search_result_list_group")
+FILTER_BTN = (By.CSS_SELECTOR, "button.filter-btn")  # opens the advanced search form
+LOWER = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ-_', 'abcdefghijklmnopqrstuvwxyz  ')"
+MODAL = "//div[contains(concat(' ', normalize-space(@class), ' '), ' modal ') and (contains(concat(' ', normalize-space(@class), ' '), ' in ') or contains(@class, 'show'))]"
+CLICKABLE = "self::a or self::button or self::i or self::span or self::li or self::label or self::td or self::div"
+
+def default_doc_type_terms():
+    """Same search texts as tc011_Multiple_Doc_Up_helper (or DOC_TYPE from .env)."""
+    return [os.getenv("DOC_TYPE")] if os.getenv("DOC_TYPE") else ["doc", "inv", "rep", "con", "ent", "ion", "ing"]
+
+# the confirmation messages of the other pages use more words than "success"
+MORE_SUCCESS_WORDS = ["archived", "restored", "deleted", "created", "updated", "checked", "linked", "unlinked", "shared",
+                      "sent", "added", "removed", "published", "assigned", "cloned", "enabled", "disabled", "approved",
+                      "rejected", "downloaded"]
+
+
+class SetupError(Exception):
+    """The test data could not be prepared (e.g. the test document did not upload). Nothing is written to Excel."""
+
+
+def xpath_text(text):
+    """Safely quote text for an XPath expression, including names containing apostrophes."""
+    text = str(text)
+    if "'" not in text:
+        return f"'{text}'"
+    if '"' not in text:
+        return f'"{text}"'
+    parts = text.split("'")
+    return "concat(" + ", \"'\", ".join(f"'{part}'" for part in parts) + ")"
+
+
+def body_text(driver):
+    return driver.find_element(By.TAG_NAME, "body").text.lower()
+
+
+def short(error):
+    return f"{type(error).__name__}: {str(error).splitlines()[0][:120]}"
+
+
+def popup_text(driver):
+    boxes = [e.text.strip() for e in driver.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
+             if e.is_displayed() and e.text.strip()]
+    return " | ".join(boxes)
+
+
+def wait_for_message(driver, text_before, seconds=20):
+    """Wait for a new success/error message. Returns (success, message)."""
+    def new_message(d):
+        texts = [e.text.lower() for e in d.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
+                 if e.is_displayed() and e.text.strip()]
+        texts.append(body_text(d))
+        for text in texts:
+            for word in SUCCESS_WORDS + ERROR_WORDS:
+                if word in text and word not in text_before:
+                    return word
+        return None
+    word = WebDriverWait(driver, seconds).until(new_message)
+    boxes = [e.text.strip() for e in driver.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
+             if e.is_displayed() and e.text.strip()]
+    return word in SUCCESS_WORDS, boxes[0] if boxes else word
+
+
+def pending_row_icon(file_name):
+    return (By.XPATH, f"//*[@id='list_view_container']//tr[@data-pending-doc-name={xpath_text(file_name)}]//i[contains(@class, 'add-item')]")
+
+
+def clear_selected_files(driver):
+    xpath = "//*[@id='selected_file_div']//*[contains(@class, 'deselect-row')]//i[contains(@class, 'delete-item')]"
+    for _ in range(20):
+        icons = driver.find_elements(By.XPATH, xpath)
+        if not icons:
+            return
+        driver.execute_script("arguments[0].click();", icons[0])
+        time.sleep(1)
+
+
+def selected_count(driver):
+    return len([e for e in driver.find_elements(By.CSS_SELECTOR, "#selected_file_div .deselect-row") if e.is_displayed()])
+
+
+def real_doc_type_options(driver):
+    skip = ("please enter", "searching", "no result", "loading")
+    return [o for o in driver.find_elements(By.CSS_SELECTOR, DOC_TYPE_OPTION)
+            if o.is_displayed() and o.text.strip() and not any(w in o.text.lower() for w in skip)]
+
+
+def best_option_index(options, term):
+    """Index of the option that is exactly the wanted doc-type. The search also matches the folder path, so the
+    first result is often another doc-type. A term with '/' is matched against the full path (the title)."""
+    wanted = term.strip().strip("/").lower()
+    if "/" in wanted:
+        for i, o in enumerate(options):
+            if (o.get_attribute("title") or "").strip().strip("/").lower() == wanted:
+                return i
+    for i, o in enumerate(options):
+        if o.text.strip().lower() == wanted.split("/")[-1]:
+            return i
+    return 0
+
+
+def select_document_type(driver, wait, terms=None):
+    wait.until(EC.element_to_be_clickable(DOC_TYPE_BOX)).click()
+    search_box = wait.until(EC.visibility_of_element_located(DOC_TYPE_SEARCH_BOX))
+    search_box.click()
+    for term in terms or DOC_TYPE_SEARCH_TERMS:
+        typed = term.strip().strip("/").split("/")[-1]  # for a path, search by the doc-type name
+        ActionChains(driver).key_down(Keys.CONTROL).send_keys("a").key_up(Keys.CONTROL).send_keys(Keys.BACKSPACE).perform()
+        for letter in typed:
+            ActionChains(driver).send_keys(letter).perform()
+            time.sleep(0.2)
+        try:
+            WebDriverWait(driver, 8).until(lambda d: bool(real_doc_type_options(d)))
+        except Exception:
+            continue
+        time.sleep(1.5)  # let the result list finish loading
+        options = real_doc_type_options(driver)
+        if options:
+            index = best_option_index(options, term)
+            option = options[index]
+            print(f"   doc-type: picked '{option.get_attribute('title')}' (result {index + 1} of {len(options)})")
+            if index == 0:
+                ActionChains(driver).send_keys(Keys.ENTER).perform()  # the first result is highlighted
+            else:  # click the wanted result with the mouse, like a user
+                driver.execute_script("arguments[0].scrollIntoView({block: 'nearest'});", option)
+                ActionChains(driver).move_to_element(option).click().perform()
+            time.sleep(1)
+            selected = driver.find_element(By.ID, "select2-DocumentType-container").text.strip()
+            if selected and "search for a document type" not in selected.lower():
+                time.sleep(2)
+                return
+            options = real_doc_type_options(driver)
+            if options:
+                ActionChains(driver).click(options[best_option_index(options, term)]).perform()
+                time.sleep(2)
+                return
+    raise SetupError("document type could not be selected")
+
+
+def fill_metadata_form(driver, wait, terms=None):
+    """Select the document type and fill visible required metadata fields with unique values."""
+    select_document_type(driver, wait, terms)
+    run_id = datetime.now().strftime("%H%M%S%f")
+    for attempt in range(3):
+        try:
+            panel = driver.find_element(*METADATA_PANEL)
+            labels = panel.find_elements(By.XPATH, ".//label[contains(., '*')]")
+            for i, label in enumerate(labels):
+                if "document type" in label.text.lower():
+                    continue
+                try:
+                    field = label.find_element(By.XPATH, "following::*[self::input or self::textarea][1]")
+                except NoSuchElementException:
+                    continue
+                if not field.is_displayed() or field.get_attribute("value"):
+                    continue
+                field_id = (field.get_attribute("id") or "").lower()
+                if "date" in field_id or "expires" in field_id:
+                    field.send_keys(datetime.now().strftime("%Y-%m-%d"))
+                elif (field.get_attribute("type") or "").lower() == "number":
+                    field.send_keys(str(int(run_id[-6:]) + i + 1))
+                else:
+                    field.send_keys(f"AUTO_{run_id}_{i}")
+            # Required bootstrap-select dropdowns (for example Checker).
+            dropdowns = panel.find_elements(By.XPATH, ".//label[contains(., '*')]/following-sibling::div[contains(@class, 'bootstrap-select')][1]/button[contains(@class, 'bs-placeholder')]")
+            for button in dropdowns:
+                if button.is_displayed():
+                    driver.execute_script("arguments[0].click();", button)
+                    options = button.find_elements(By.XPATH, "../div[contains(@class, 'dropdown-menu')]//li[not(contains(@class, 'disabled'))]/a")
+                    if options:
+                        driver.execute_script("arguments[0].click();", options[0])
+            return
+        except StaleElementReferenceException:
+            if attempt == 2:
+                raise
+            time.sleep(1)
+
+
+def fail(driver, test_case_id, slug, message):
+    """Save failure screenshot and page HTML; return the failure tuple used by run()."""
+    shown = popup_text(driver)
+    if shown and shown.lower() not in message.lower():
+        message += f" - page said: {shown}"
+    save_shot(driver, test_case_id, slug, "FAIL")
+    os.makedirs("debug", exist_ok=True)
+    with open(os.path.join("debug", f"{test_case_id}_{slug}.html"), "w", encoding="utf-8") as file:
+        file.write(driver.page_source)
+    return False, message
+
+
+# ---------- find and click ----------
+def predicate(label, exact):
+    """XPath condition: text, title or aria-label is (or contains) the label. Not case sensitive, '-' and '_' count as spaces."""
+    text = label.lower().replace("-", " ").replace("_", " ")
+    fields = [LOWER.format("normalize-space(.)"), LOWER.format("normalize-space(@title)"),
+              LOWER.format("normalize-space(@data-original-title)"), LOWER.format("normalize-space(@aria-label)"),
+              LOWER.format("normalize-space(@value)")]
+    if exact:
+        return "[" + " or ".join(f"{f} = {xpath_text(text)}" for f in fields) + "]"
+    return "[" + " or ".join(f"contains({f}, {xpath_text(text)})" for f in fields) + "]"
+
+
+def find_by_label(driver, label, root=None, slack=25):
+    """First visible button / icon / link with this text, title or aria-label. Exact match first. Looks inside an open popup first."""
+    scopes = [None] if root is not None else [MODAL, ""]
+    for scope in scopes:
+        for exact in (True, False):
+            if root is not None:
+                found = root.find_elements(By.XPATH, f".//*[{CLICKABLE}]{predicate(label, exact)}")
+            else:
+                found = driver.find_elements(By.XPATH, f"{scope}//*[{CLICKABLE}]{predicate(label, exact)}")
+            # skip big containers that only contain the text somewhere inside
+            found = [e for e in found if e.is_displayed() and len(e.text.strip()) <= len(label) + slack]
+            if found:
+                return found[0]
+    return None
+
+
+def find_near(driver, anchor_text, label):
+    """The button / icon `label` that sits in the same row, card or section as the text `anchor_text`."""
+    anchor = find_by_label(driver, anchor_text, slack=300)
+    if anchor is None:
+        return None
+    try:
+        container = anchor.find_element(By.XPATH, f"ancestor::*[.//*[{CLICKABLE}]{predicate(label, False)}][1]")
+    except NoSuchElementException:
+        return None
+    return find_by_label(driver, label, root=container)
+
+
+def click(driver, element):
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+    try:
+        element.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", element)  # something is in front of it, click with JavaScript
+
+
+def click_label(driver, wait, label, slack=25):
+    element = WebDriverWait(driver, 10).until(lambda d: find_by_label(d, label, slack=slack))
+    click(driver, element)
+    return element
+
+
+def click_near(driver, wait, anchor_text, label):
+    element = WebDriverWait(driver, 10).until(lambda d: find_near(d, anchor_text, label))
+    click(driver, element)
+    return element
+
+
+def double_click_label(driver, wait, label):
+    element = WebDriverWait(driver, 10).until(lambda d: find_by_label(d, label))
+    ActionChains(driver).double_click(element).perform()
+
+
+def confirm(driver, wait, label="yes", seconds=6):
+    """Click the Yes button of the confirmation popup (sweet alert or modal). Returns False if no popup showed up."""
+    def button(d):
+        for b in d.find_elements(By.CSS_SELECTOR, ".swal2-confirm, .swal2-modal button, .modal.in button, .modal.show button"):
+            if b.is_displayed() and (label in b.text.lower() or "swal2-confirm" in (b.get_attribute("class") or "")):
+                return b
+    try:
+        click(driver, WebDriverWait(driver, seconds).until(button))
+        return True
+    except Exception:
+        return False
+
+
+def confirm_any(driver, wait, labels=("yes", "ok", "submit", "reject")):
+    for label in labels:
+        if confirm(driver, wait, label, seconds=2):
+            return True
+    return False
+
+
+def visible(driver, css):
+    return [e for e in driver.find_elements(By.CSS_SELECTOR, css) if e.is_displayed()]
+
+
+def clean(text):
+    return re.sub(r"[*:]", "", text or "").strip().lower()
+
+
+def find_field(driver, label_text):
+    """The input / textarea / select that follows the label with this text (a * is ignored)."""
+    wanted = label_text.lower()
+    labels = [lb for lb in driver.find_elements(By.TAG_NAME, "label") if lb.is_displayed()]
+    for matches in (lambda t: t == wanted, lambda t: t.startswith(wanted), lambda t: wanted in t):
+        for label in labels:
+            if matches(clean(label.text)):
+                try:
+                    return label.find_element(By.XPATH, "following::*[self::input or self::textarea or self::select][1]")
+                except NoSuchElementException:
+                    continue
+    return None
+
+
+def fill_field(driver, label_text, value):
+    field = WebDriverWait(driver, 10).until(lambda d: find_field(d, label_text))
+    field.clear()
+    field.send_keys(value)
+
+
+def pick_option(driver, label_text, option_text=None):
+    """Choose an option of the drop-down that follows the label. First real option if option_text is not given."""
+    field = WebDriverWait(driver, 10).until(lambda d: find_field(d, label_text))
+    if field.tag_name == "select" and field.is_displayed():
+        select = Select(field)
+        for option in select.options:
+            if option.get_attribute("value") and (not option_text or option_text.lower() in option.text.lower()):
+                select.select_by_visible_text(option.text)
+                return option.text
+        raise Exception(f"no option '{option_text}' in '{label_text}'")
+    # bootstrap-select / select2: click the visible button, then the option
+    button = field.find_element(By.XPATH, "following::*[contains(@class, 'dropdown-toggle') or contains(@class, 'select2-selection')][1]")
+    click(driver, button)
+    time.sleep(1)
+    options = [o for o in visible(driver, ".dropdown-menu.open li:not(.disabled) a, .select2-results__option") if o.text.strip()]
+    if option_text:
+        options = [o for o in options if option_text.lower() in o.text.lower()] or options
+    text = options[0].text
+    click(driver, options[0])
+    return text
+
+
+def pick_select2(driver, wait, term, nth=0):
+    """Open the nth visible select2 drop-down on the page, type the term like a user and pick the first result."""
+    boxes = visible(driver, "span.select2-selection")
+    click(driver, boxes[nth])
+    search = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input.select2-search__field")))
+    for letter in term:
+        ActionChains(driver).send_keys(letter).perform()
+        time.sleep(0.3)
+
+    def option(d):
+        for o in d.find_elements(By.CSS_SELECTOR, ".select2-results__option"):
+            if o.is_displayed() and o.text.strip() and not any(w in o.text.lower() for w in ("please enter", "searching", "no result", "loading")):
+                return o
+    first = WebDriverWait(driver, 10).until(option)
+    text = first.text.strip()
+    search.send_keys(Keys.ENTER)
+    return text
+
+
+def modal_text_input(driver):
+    """First empty visible text box inside the open popup."""
+    boxes = driver.find_elements(By.XPATH, f"{MODAL}//input[@type='text' or not(@type)]")
+    boxes = [b for b in boxes if b.is_displayed() and b.is_enabled() and not b.get_attribute("readonly")]
+    return boxes[0] if boxes else None
+
+
+def attach_to_file_input(driver, wait, path):
+    """Send a file to the (hidden) file input that was added last, like the Attach Documents page does."""
+    inputs = driver.find_elements(*FILE_INPUT)
+    file_input = inputs[-1]
+    driver.execute_script("arguments[0].style.display='block'; arguments[0].style.visibility='visible';", file_input)
+    file_input.send_keys(path)
+
+
+# ---------- messages ----------
+def messages_gone(driver):
+    return not any(e.is_displayed() for e in driver.find_elements(By.CSS_SELECTOR, MESSAGE_BOX))
+
+
+def message_after(driver, action):
+    """Run action() (a click...), then wait for the confirmation / error message. Returns (True/False, message)."""
+    try:
+        WebDriverWait(driver, 6).until(messages_gone)  # an old message can still be on the screen
+    except Exception:
+        pass
+    text_before = body_text(driver)
+    action()
+    ok, message = wait_for_message(driver, text_before)
+    message = re.sub(r"^[×x]?\s*close\s*", "", " ".join(message.split()), flags=re.I)
+    return ok, message
+
+
+def do(driver, wait, label, confirm_label=None):
+    """Click a button / icon by its label, press Yes on the popup (if any), return (True/False, message)."""
+    def action():
+        click_label(driver, wait, label)
+        if confirm_label:
+            confirm(driver, wait, confirm_label)
+    return message_after(driver, action)
+
+
+def do_near(driver, wait, anchor_text, label, confirm_label=None):
+    """Same as do(), but the button is the one in the same row / card as the anchor text."""
+    def action():
+        click_near(driver, wait, anchor_text, label)
+        if confirm_label:
+            confirm(driver, wait, confirm_label)
+    return message_after(driver, action)
+
+
+def wait_text(driver, text, seconds=8):
+    """True if the text shows up on the page within a few seconds."""
+    try:
+        WebDriverWait(driver, seconds).until(lambda d: text.lower() in body_text(d))
+        return True
+    except Exception:
+        return False
+
+
+# ---------- downloads ----------
+def wait_for_download(before, seconds=30):
+    """Name of a new finished file in DOWNLOAD_DIR, or None."""
+    end = time.time() + seconds
+    while time.time() < end:
+        new = [n for n in set(os.listdir(DOWNLOAD_DIR)) - before if not n.endswith((".crdownload", ".tmp"))]
+        if new:
+            return new[0]
+        time.sleep(1)
+    return None
+
+
+# ---------- upload a test document ----------
+def current_doc_type(driver):
+    return driver.find_element(By.ID, "select2-DocumentType-container").text.replace("×", "").strip()
+
+
+def unique_copy(path):
+    """Copy the sample file with a unique name AND unique content, so the system never sees the same file name or
+    checksum twice (it refuses a file whose content it already has). A random trailer is added at the end;
+    PDF, image and text files ignore it."""
+    folder = os.path.join(DOWNLOAD_DIR, "upload_copies")
+    os.makedirs(folder, exist_ok=True)
+    name = datetime.now().strftime("AUTO%H%M%S%f")[:12] + "_" + os.path.basename(path)
+    new_path = os.path.join(folder, name)
+    shutil.copy2(path, new_path)
+    with open(new_path, "ab") as f:
+        f.write(("\n%unique " + uuid.uuid4().hex + "\n").encode())
+    return name, new_path
+
+
+def pending_names(driver):
+    """File names in the Pending Files list (all pages)."""
+    names, seen = [], set()
+    for _ in range(10):
+        page = [r.get_attribute("data-pending-doc-name") for r in driver.find_elements(By.CSS_SELECTOR, "#list_view_container tr.pending-meta")]
+        if tuple(page) in seen:
+            break  # the same rows again: no more pages
+        seen.add(tuple(page))
+        names += page
+        more = [b for b in driver.find_elements(By.CSS_SELECTOR, "#pagination button.next") if b.is_displayed() and b.is_enabled()]
+        if not more:
+            break
+        click(driver, more[0])
+        time.sleep(1.5)
+    return names
+
+
+def open_pending_list(driver, wait):
+    driver.get(PENDING_URL)
+    wait.until(EC.presence_of_element_located((By.ID, "list_view_container")))
+    time.sleep(2)  # the rows and the files selected earlier are loaded after the page
+
+
+def click_pending_icon(driver, file_name):
+    """Click the paperclip icon of the file (goes through the pages of the list). Returns False if the file is not found."""
+    for _ in range(10):
+        icons = [i for i in driver.find_elements(*pending_row_icon(file_name)) if i.is_displayed()]
+        if icons:
+            click(driver, icons[0])
+            return True
+        more = [b for b in driver.find_elements(By.CSS_SELECTOR, "#pagination button.next") if b.is_displayed() and b.is_enabled()]
+        if not more:
+            return False
+        click(driver, more[0])
+        time.sleep(1.5)
+    return False
+
+
+def attach_new_file(driver, wait, path):
+    """Attach the file and return the name the system gave it in the Pending Files list (or None if nothing new was added)."""
+    open_pending_list(driver, wait)
+    before = Counter(pending_names(driver))
+    driver.get(ATTACH_URL)
+    # The page has several file inputs (signature upload, sweet-alert, ...). The Dropzone one is created by
+    # JavaScript after the page has loaded, so wait for it and use exactly that one.
+    try:
+        file_input = WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "input.dz-hidden-input")))
+    except Exception:
+        raise SetupError(f"the Dropzone file input was not found on the Attach Documents page: {driver.current_url}")
+    file_input.send_keys(path)
+    # Dropzone uploads at once (autoProcessQueue); wait until it finishes before leaving the page,
+    # otherwise the upload is cancelled.
+    try:
+        WebDriverWait(driver, 60).until(lambda d: d.find_elements(By.CSS_SELECTOR, ".dz-preview.dz-success, .dz-preview.dz-error"))
+    except Exception:
+        pass
+    errors = [e.text.strip() for e in driver.find_elements(By.CSS_SELECTOR, ".dz-preview.dz-error .dz-error-message") if e.text.strip()]
+    os.makedirs("debug", exist_ok=True)
+    driver.save_screenshot(os.path.join("debug", "attach_upload.png"))
+    with open(os.path.join("debug", "attach_upload.html"), "w", encoding="utf-8") as debug_file:
+        debug_file.write(driver.page_source)
+    if errors:
+        print(f"   Attach Documents page refused the file: {errors[0]}")
+        return None
+    for _ in range(6):  # a big file can take a while
+        time.sleep(3)
+        open_pending_list(driver, wait)
+        new = Counter(pending_names(driver)) - before
+        if new:
+            return next(iter(new))
+    return None
+
+
+def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True):
+    """Attach a sample file, open it in the Pending list, choose the Document Type, fill the required meta-data. Returns the file name.
+    With fill=False only the Document Type is chosen (the meta-data is left empty for the test to fill).
+    Any problem here is a SetupError (the test itself was not reached), with the reason in the message."""
+    sample = find_sample_file(ext)
+    if not sample:
+        raise SetupError(f"no .{ext} sample file in {SAMPLE_DIR}")
+    try:
+        copy_name, copy_path = unique_copy(sample[1])
+        # first a copy with a unique name, then the original file (in case the system does not like the copy)
+        pending_name = attach_new_file(driver, wait, copy_path) or attach_new_file(driver, wait, sample[1])
+        if not pending_name:
+            raise SetupError(f"the system did not add '{sample[0]}' to the Pending Files list, not even as a copy with new content. "
+                             f"Page said: {popup_text(driver) or 'nothing'}. Look at the Attach Documents page and the screenshot in debug")
+        open_pending_list(driver, wait)  # back to page 1; the page remembers files selected earlier, remove them
+        clear_selected_files(driver)
+        if selected_count(driver):
+            raise SetupError("files from an earlier run are still selected in Pending Documents and could not be removed")
+        if not click_pending_icon(driver, pending_name):
+            raise SetupError(f"'{pending_name}' is in the Pending Files list but its paperclip icon could not be clicked")
+        time.sleep(1)
+        if selected_count(driver) != 1:
+            raise SetupError(f"the file could not be selected for the meta-data panel. Page said: {popup_text(driver) or 'nothing'}")
+        terms = [doc_type] if doc_type else default_doc_type_terms()
+        if fill:
+            fill_metadata_form(driver, wait, terms)
+            if os.getenv("CHECKER_NAME") and driver.find_element(By.ID, "checker-div").is_displayed():
+                pick_option(driver, "checker", os.getenv("CHECKER_NAME"))
+        else:
+            select_document_type(driver, wait, terms)
+            time.sleep(2)  # the meta-data fields of the document type are added after it is selected  # the meta-data fields of the document type are added after it is selected
+    except SetupError:
+        raise
+    except Exception as error:
+        raise SetupError(f"could not prepare the upload ({short(error)}) at {driver.current_url}")
+    return pending_name
+
+
+def set_document_name(driver, name):
+    """Give the document a unique name. Returns the name in the field (a name convention can lock the field)."""
+    field = driver.find_element(By.ID, "file_name")
+    try:
+        field.clear()
+        field.send_keys(name)
+    except Exception:
+        pass  # read-only: the name comes from the document name convention
+    return field.get_attribute("value")
+
+
+def field_value(driver, field_id):
+    """Value of a field by id. Looks it up again if the form was redrawn in the meantime."""
+    for attempt in range(4):
+        try:
+            return driver.find_element(By.ID, field_id).get_attribute("value")
+        except StaleElementReferenceException:
+            time.sleep(1)
+    return ""
+
+
+def filled_values(driver):
+    """(label, value) of the text fields that were filled with AUTO_ values in the meta-data panel."""
+    for attempt in range(4):
+        try:  # the form can redraw itself (e.g. when the document name is built), so look the fields up again
+            pairs = []
+            panel = driver.find_element(*METADATA_PANEL)
+            for field in panel.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='number'], textarea"):
+                value = field.get_attribute("value") or ""
+                if field.is_displayed() and value.startswith("AUTO_") and field.get_attribute("id") != "file_name":
+                    try:
+                        label = field.find_element(By.XPATH, "preceding::label[1]").text
+                    except NoSuchElementException:
+                        label = ""
+                    pairs.append((clean(label), value))
+            return pairs
+        except StaleElementReferenceException:
+            time.sleep(1)
+    return []
+
+
+def select_share(driver, kind):
+    """Pick an option of the Share With drop-down: 'public', 'all users', 'groups' or 'users' (first option of that group)."""
+    script = """
+        var s = document.getElementById('shared_docs'); var picked = '';
+        var kind = arguments[0];
+        if (kind == 'public') { var o = s.querySelector("option[value='all-1']"); o.selected = true; picked = o.text.trim(); }
+        else if (kind == 'all users') { var o = s.querySelector("option[value='all-2']"); o.selected = true; picked = o.text.trim(); }
+        else { s.querySelectorAll('optgroup').forEach(function(g) {
+            if (g.label.toLowerCase() == kind && !picked) { var o = g.querySelector('option'); if (o) { o.selected = true; picked = o.text.trim(); } } }); }
+        $(s).trigger('change');
+        return picked;"""
+    picked = driver.execute_script(script, kind)
+    if not picked:
+        raise Exception(f"no '{kind}' option in Share With")
+    return picked
+
+
+def upload_document(driver, wait, ext="pdf", doc_type=None, share=None):
+    """Upload one test document with a unique name. Returns {'name', 'doc_type', 'values'}."""
+    try:
+        prepare_upload(driver, wait, ext, doc_type)
+        info = {"doc_type": current_doc_type(driver), "values": filled_values(driver)}
+        if share:
+            info["shared_with"] = select_share(driver, share)
+        info["name"] = set_document_name(driver, datetime.now().strftime("AUTO_%H%M%S"))
+        text_before = body_text(driver)
+        driver.find_element(*UPLOAD_BTN).click()
+        ok, message = wait_for_message(driver, text_before)
+    except SetupError:
+        raise
+    except Exception as error:
+        raise SetupError(f"test document did not upload ({short(error)})")
+    if not ok:
+        raise SetupError(f"test document did not upload ({message})")
+    time.sleep(2)
+    return info
+
+
+# ---------- search and open ----------
+def quick_search(driver, wait, text):
+    """Type the text in the top search box and return the suggestion list text after it has loaded."""
+    box = wait.until(EC.element_to_be_clickable(SEARCH_BOX))
+    box.clear()
+    box.send_keys(text)
+    time.sleep(3)  # suggestions load after typing
+    return driver.find_element(*SEARCH_RESULTS).text
+
+
+def search_finds(driver, wait, name, tries=1):
+    """True if quick search shows the document name."""
+    for _ in range(tries):
+        driver.get(EXPLORER_URL)
+        if name in quick_search(driver, wait, name):
+            return True
+        time.sleep(3)
+    return False
+
+
+def switch_to_new_tab(driver, old_tabs):
+    if len(driver.window_handles) > len(old_tabs):
+        driver.switch_to.window(driver.window_handles[-1])
+
+
+def open_document(driver, wait, name):
+    """Find the document with quick search and open it."""
+    if not search_finds(driver, wait, name, tries=5):  # search can take a few seconds to index a new document
+        raise SetupError(f"document '{name}' not found in quick search")
+    old_tabs = driver.window_handles
+    xpath = f"//*[@id='search_result_list_group']//a[contains(., {xpath_text(name)})]"
+    click(driver, driver.find_element(By.XPATH, xpath))
+    time.sleep(3)
+    switch_to_new_tab(driver, old_tabs)
+
+
+def new_document(driver, wait, ext="pdf"):
+    """Upload a fresh test document and open it. Returns the upload info."""
+    info = upload_document(driver, wait, ext)
+    open_document(driver, wait, info["name"])
+    return info
+
+
+def advanced_search(driver, wait, name, include_archive=False, match_all=True, doc_type=None, extra=None):
+    """Fill the advanced search form (top bar arrow icon) with the document name and press Search."""
+    if not driver.find_elements(By.CSS_SELECTOR, "#dms_search_form") or not driver.find_element(By.ID, "dms_search_form").is_displayed():
+        click(driver, wait.until(EC.element_to_be_clickable(FILTER_BTN)))
+    box = wait.until(EC.visibility_of_element_located((By.ID, "docname")))
+    box.clear()
+    box.send_keys(name or "")
+    if doc_type:
+        pick_select2_by_id(driver, wait, "documentType", doc_type)
+    for field_label, value in (extra or []):
+        fill_field(driver, field_label, value)
+    for checkbox_id, wanted in (("include_archive", include_archive), ("match_all", match_all)):
+        if driver.find_element(By.ID, checkbox_id).is_selected() != wanted:
+            click(driver, driver.find_element(By.CSS_SELECTOR, f"label[for='{checkbox_id}'].ts-helper"))
+    click(driver, driver.find_element(By.ID, "search_btn"))
+    time.sleep(3)
+
+
+def pick_select2_by_id(driver, wait, select_id, term):
+    box = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, f"span.select2-selection[aria-labelledby='select2-{select_id}-container']")))
+    click(driver, box)
+    search = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input.select2-search__field")))
+    for letter in term[:5]:
+        ActionChains(driver).send_keys(letter).perform()
+        time.sleep(0.3)
+
+    def option(d):
+        for o in d.find_elements(By.CSS_SELECTOR, f"#select2-{select_id}-results .select2-results__option"):
+            if o.is_displayed() and o.text.strip() and not any(w in o.text.lower() for w in ("please enter", "searching", "no result", "loading")):
+                return o
+    WebDriverWait(driver, 10).until(option)
+    search.send_keys(Keys.ENTER)
+
+
+def advanced_finds(driver, wait, name, **options):
+    driver.get(EXPLORER_URL)
+    advanced_search(driver, wait, name, **options)
+    return name.lower() in body_text(driver)
+
+
+def explorer_has(driver, wait, doc_type, name):
+    """Open My Documents, go into the document type and look for the document name."""
+    driver.get(EXPLORER_URL)
+    try:
+        click_label(driver, wait, doc_type)
+    except Exception:
+        return False
+    return wait_text(driver, name, 6)
+
+
+# ---------- related files / versions ----------
+def add_version(driver, wait, suffix="v2"):
+    """Open version history, click Add, attach a file, type the extended name part, click Save Changes."""
+    path = find_sample_file("pdf")[1]
+    click_label(driver, wait, "version history")
+    click_label(driver, wait, "add")
+    time.sleep(1)
+    attach_to_file_input(driver, wait, path)
+    time.sleep(2)
+    extra = modal_text_input(driver)
+    if extra is not None:
+        extra.send_keys(suffix)
+    return do(driver, wait, "save changes")
+
+
+def show_versions(driver, wait, version_text):
+    """Make sure the version history is open (the version row has this text in its name)."""
+    if find_by_label(driver, version_text, slack=300) is None:
+        click_label(driver, wait, "version history")
+        time.sleep(2)
+
+
+def link_related(driver, wait, other_name):
+    """On the open document: Add icon on related files, tick the other document, click Link."""
+    click_label(driver, wait, "related files")
+    click_label(driver, wait, "add")
+    time.sleep(2)
+    box = wait.until(EC.visibility_of_element_located((By.XPATH, f"{MODAL}//input[@type='text' or @type='search']")))
+    box.send_keys(other_name)
+    time.sleep(3)
+    row = driver.find_element(By.XPATH, f"//*[self::tr or self::li][contains(., {xpath_text(other_name)})]")
+    click(driver, row.find_element(By.XPATH, ".//input[@type='checkbox']/.. | .//input[@type='checkbox']"))
+    return do(driver, wait, "link")
+
+
+# ---------- second user ----------
+def need_other_user():
+    if not (OTHER_USERNAME and OTHER_PASSWORD):
+        raise SystemExit("Set OTHER_USERNAME and OTHER_PASSWORD in .env (a second permitted general user), then run again.")
+
+
+def need_env(name, hint=""):
+    value = os.getenv(name)
+    if not value:
+        raise SystemExit(f"Set {name} in .env {hint}, then run again.")
+    return value
+
+
+def login_as(driver, wait, username, password):
+    driver.get(BASE_URL)
+    wait.until(EC.visibility_of_element_located(LOGIN_USER)).send_keys(username)
+    driver.find_element(*LOGIN_PASS).send_keys(password, Keys.ENTER)
+    wait.until(EC.invisibility_of_element_located(LOGIN_USER))
+
+
+def logout(driver):
+    driver.get(BASE_URL + "/login/logout/")
+
+
+def as_other_user(driver, wait, function):
+    """Log in as the second user, run function(), log back in as the main user. Returns what function returned."""
+    logout(driver)
+    login_as(driver, wait, OTHER_USERNAME, OTHER_PASSWORD)
+    try:
+        return function()
+    finally:
+        logout(driver)
+        login_as(driver, wait, USERNAME, PASSWORD)
+
+
+def other_user_sees(driver, wait, name):
+    """True if the second user finds the document with quick search."""
+    return as_other_user(driver, wait, lambda: search_finds(driver, wait, name))
+
+
+# ---------- run one test case ----------
+def start_browser():
+    options = Options()
+    options.add_experimental_option("prefs", {"download.default_directory": DOWNLOAD_DIR,
+                                              "download.prompt_for_download": False,
+                                              "profile.default_content_setting_values.automatic_downloads": 1})
+    driver = webdriver.Chrome(options=options)
+    driver.maximize_window()
+    return driver, WebDriverWait(driver, 15)
+
+
+def run(test_case_id, scenarios):
+    """Check Excel, open the browser, log in, run every (label, function) scenario, write the result to Excel.
+    Each function(driver, wait) returns (True/False, message)."""
+    check_excel_ready(test_case_id)
+
+# Add extra success words without reassigning the global list.
+    for word in MORE_SUCCESS_WORDS:
+        if word not in SUCCESS_WORDS:
+            SUCCESS_WORDS.append(word)
+
+    driver, wait = start_browser()
+    results = []
+    setup_problem = None
+
+    try:
+        login(driver, wait)
+        for label, scenario in scenarios:
+            slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+            try:
+                ok, msg = scenario(driver, wait)
+            except SetupError as error:
+                setup_problem = f"{label}: {error}"
+                fail(driver, test_case_id, slug, str(error))
+                break
+            except Exception as error:
+                ok, msg = False, short(error)
+            if ok:
+                save_shot(driver, test_case_id, slug, "PASS")
+            else:
+                ok, msg = fail(driver, test_case_id, slug, msg)
+            print(f"{label:28} -> {'PASS' if ok else 'FAIL'} ({msg})")
+            results.append((label, ok, msg))
+    finally:
+        driver.quit()
+
+    if setup_problem:
+        raise SystemExit(f"Could not prepare the test data, nothing was written to Excel. {setup_problem}")
+
+    status = "Pass" if all(ok for _, ok, _ in results) else "Fail"
+    if len(results) == 1:
+        actual = results[0][2]
+    else:
+        actual = ". ".join(f"{label}: {'OK' if ok else 'FAILED'} - {msg}" for label, ok, msg in results)
+
+    write_result(test_case_id, actual, status)
+    print(f"\n{test_case_id}: {status}")
+
+
+# the tc011 helper imports this file too, so it is imported last (everything above is defined by then)
+import tc011_Multiple_Doc_Up_helper as h  # noqa: E402
