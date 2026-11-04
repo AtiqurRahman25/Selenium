@@ -1,5 +1,7 @@
 """
-DMS-TC014	Version Doc Upload	"1. Open a document
+DMS-TC014	
+Version Doc Upload	
+"1. Open a document
 2. Click on ""Add"" icon on version history
 3. Select new version doc, can give file name extended part
 4. Click on ""Save Changes
