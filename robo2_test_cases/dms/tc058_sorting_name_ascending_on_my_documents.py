@@ -24,7 +24,7 @@ def sorting(driver, wait):
 
     names = [row[1] for row in rows]  # 2nd column = Document Name
     for i in range(len(names) - 1):
-        if names[i].lower() > names[i + 1].lower():
+        if e.sort_name(names[i]) > e.sort_name(names[i + 1]):
             return False, (f"NOT Name ascending: '{names[i]}' is shown before '{names[i + 1]}'. "
                            f"{len(names)} documents checked over {pages} pages")
     return True, f"{len(names)} documents checked over {pages} pages: Name ascending"

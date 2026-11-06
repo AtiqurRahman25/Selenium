@@ -3,6 +3,7 @@ Shared helpers for the My Documents (explorer) test scripts: open a category / d
 choose Order By, read the list view page by page.
 Keep this file in the same folder as common.py.
 """
+import os
 import time
 
 from selenium.common.exceptions import StaleElementReferenceException
@@ -26,6 +27,11 @@ def name_of(anchor):
 def child_anchors(scope):
     anchors = scope.find_elements(By.XPATH, CHILDREN)
     return [a for a in anchors if not name_of(a).lower().startswith("loading")]  # skip jsTree 'Loading ...' placeholder
+
+
+def sort_name(name):
+    """A document name the way the app sorts it: no file extension, lower case."""
+    return os.path.splitext(name)[0].lower()
 
 
 def open_doc_type(driver, wait, path):
