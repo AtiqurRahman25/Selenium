@@ -25,18 +25,19 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 
 load_dotenv()
 
-# ---------- config (from .env) ----------
-BASE_URL = os.getenv("BASE_URL", "https://ecmv6.robo2mation.dev")
+# config (from .env)
+BASE_URL = os.getenv("BASE_URL")
 USERNAME = os.getenv("DMS_USERNAME")
 PASSWORD = os.getenv("DMS_PASSWORD")
 OTHER_USERNAME = os.getenv("OTHER_USERNAME")
 OTHER_PASSWORD = os.getenv("OTHER_PASSWORD")
-EXCEL_PATH = os.getenv("EXCEL_PATH", r"D:\Selenium\robo2_test_cases\Robo2mation_26Q1_Sanity_Test_Case_Doc.xlsx")
-SAMPLE_DIR = os.getenv("SAMPLE_DIR", "test_files")
-TESTER_NAME = os.getenv("TESTER_NAME", "Sharar")
+EXCEL_PATH = os.getenv("EXCEL_PATH")
+SAMPLE_DIR = os.getenv("SAMPLE_DIR")
+TESTER_NAME = os.getenv("TESTER_NAME")
 SHEET_NAME = os.getenv("SHEET_NAME", "DMS")
 SCREENSHOT_DIR = os.getenv("SCREENSHOT_DIR", "screenshots")
 DOWNLOAD_DIR = os.path.abspath(os.getenv("DOWNLOAD_DIR", "downloads"))
+DEBUG_DIR = os.path.abspath(os.getenv("DEBUG_DIR"))    
 EVIDENCE_LINK = os.getenv("EVIDENCE_LINK")
 EVIDENCE_HEADER = os.getenv("EVIDENCE_HEADER", "remark").lower()
 HEADER_ROW = 4
@@ -48,15 +49,14 @@ EXTENSIONS = [
 
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-os.makedirs("debug", exist_ok=True)
+os.makedirs(DEBUG_DIR, exist_ok=True)
 
-# ---------- URLs ----------
+# URLs
 EXPLORER_URL = BASE_URL + "/dms/document/explorer/"
 ROOT_URL = BASE_URL + "/dms/document/root"
 DELETED_ROOT_URL = BASE_URL + "/dms/document/deleted-root"
 RESTORE_URL = BASE_URL + "/dms/restore/"
 CHECKOUT_URL = BASE_URL + "/dms/document/checkout/"
-SHARED_URL = BASE_URL + "/dms/document/share/"
 BULK_URL = BASE_URL + "/dms/document/upload/bulk-upload/"
 REVIEW_URL = BASE_URL + "/dms/document/pending-for-review/"
 MASTER_TABLE_URL = BASE_URL + "/dms/document/settings/master-table-method/"
@@ -64,7 +64,7 @@ ATTACH_URL = BASE_URL + "/dms/document/upload/standard_upload/"
 PENDING_URL = BASE_URL + "/dms/document/upload/standard_upload/filesave/pendingmetalist/"
 REQUESTED_DOWNLOAD_URL = BASE_URL + "/requested_downloads/view/"
 
-# ---------- locators ----------
+# locators
 LOGIN_USER = (By.XPATH, "//input[contains(@placeholder, 'Username')]")
 LOGIN_PASS = (By.XPATH, "//input[contains(@placeholder, 'Password')]")
 FILE_INPUT = (By.CSS_SELECTOR, "input[type='file']")
@@ -111,16 +111,11 @@ FIELD_XPATH = (
 )
 
 
-def default_doc_type_terms():
-    """Return default document type search terms (compatible with tc011 helper)."""
-    return DOC_TYPE_SEARCH_TERMS
-
-
 class SetupError(Exception):
     """Raised when test data could not be prepared; nothing is written to Excel."""
 
 
-# ---------- login & session ----------
+# login & session
 def login(driver, wait):
     driver.get(BASE_URL)
     wait.until(EC.visibility_of_element_located(LOGIN_USER)).send_keys(USERNAME)
@@ -181,11 +176,6 @@ def as_other_user(driver, wait, function):
         login_as(driver, wait, USERNAME, PASSWORD)
 
 
-def other_user_sees(driver, wait, name, tries=1):
-    """True if the second user finds the document with quick search."""
-    return as_other_user(driver, wait, lambda: search_finds(driver, wait, name, tries=tries))
-
-
 def need_other_user():
     if not (OTHER_USERNAME and OTHER_PASSWORD):
         raise SystemExit("Set OTHER_USERNAME and OTHER_PASSWORD in .env (a second permitted general user), then run again.")
@@ -198,7 +188,7 @@ def need_env(name, hint=""):
     return value
 
 
-# ---------- files, screenshots & Excel ----------
+# files, screenshots & Excel
 def find_sample_file(ext):
     """Return (file name, full path) of any file in SAMPLE_DIR ending with .<ext>, or None."""
     for name in os.listdir(SAMPLE_DIR):
@@ -293,7 +283,7 @@ def write_result(test_case_id, actual, status):
             print(f"  {cell.coordinate} [{check.cell(HEADER_ROW, col).value}] = {cell.value!r}")
 
 
-# ---------- text & error helpers ----------
+# text & error helpers
 def xpath_text(text):
     """Safely quote text for an XPath expression, including strings containing apostrophes."""
     text = str(text)
@@ -334,17 +324,13 @@ def short(error):
     return f"{type(error).__name__}: {first}"
 
 
-# ---------- messages & notifications ----------
+# messages & notifications
 def popup_text(driver):
     boxes = [
         e.text.strip() for e in driver.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
         if e.is_displayed() and e.text.strip()
     ]
     return " | ".join(boxes)
-
-
-def messages_gone(driver):
-    return not any(e.is_displayed() for e in driver.find_elements(By.CSS_SELECTOR, MESSAGE_BOX))
 
 
 def wait_for_message(driver, text_before, seconds=20):
@@ -360,8 +346,7 @@ def wait_for_message(driver, text_before, seconds=20):
             saved = ""
         if saved and saved not in boxes:
             boxes.append(saved)
-        texts = [b.lower() for b in boxes] + [body_text(d)]
-        for text in texts:
+        for text in [b.lower() for b in boxes] + [body_text(d)]:
             for word in SUCCESS_WORDS + ERROR_WORDS:
                 if word in text and word not in text_before:
                     return word, (boxes[0] if boxes else word)
@@ -378,7 +363,7 @@ def wait_for_message(driver, text_before, seconds=20):
 def message_after(driver, action):
     """Run action() and wait for the confirmation or error message. Returns (True/False, message)."""
     try:
-        WebDriverWait(driver, 6).until(messages_gone)
+        WebDriverWait(driver, 6).until(lambda d: not visible(d, MESSAGE_BOX))
     except Exception:
         pass
     try:
@@ -412,7 +397,7 @@ def wait_text(driver, text, seconds=8):
         return False
 
 
-# ---------- find and click ----------
+# find and click
 def predicate(label, exact):
     """XPath predicate matching text, title, aria-label, or value (case-insensitive, '-' and '_' treated as spaces)."""
     text = label.lower().replace("-", " ").replace("_", " ")
@@ -631,11 +616,6 @@ def select2_options(driver, css=DOC_TYPE_OPTION):
         return []
 
 
-def real_doc_type_options(driver):
-    """Alias kept for backward compatibility with helper scripts."""
-    return select2_options(driver, DOC_TYPE_OPTION)
-
-
 def best_option_index(options, term):
     """Index of the option matching `term` (matches full path on `title` when `term` contains '/')."""
     wanted = term.strip().strip("/").lower()
@@ -650,7 +630,6 @@ def best_option_index(options, term):
         if title == leaf or title.split("/")[-1] == leaf:
             return i
     return 0
-
 
 def pick_select2(driver, wait, term, nth=0):
     """Open the nth visible Select2 dropdown, type `term`, and pick the first result."""
@@ -726,7 +705,7 @@ def attach_to_file_input(driver, wait, path):
     file_input.send_keys(path)
 
 
-# ---------- downloads ----------
+# downloads
 def wait_for_download(before, seconds=30):
     """Return the name of a newly finished file in DOWNLOAD_DIR, or None."""
     end = time.time() + seconds
@@ -738,7 +717,7 @@ def wait_for_download(before, seconds=30):
     return None
 
 
-# ---------- document upload ----------
+# document upload
 def pending_row_icon(file_name):
     return (
         By.XPATH,
@@ -1076,21 +1055,16 @@ def upload_document(driver, wait, ext="pdf", doc_type=None, share=None):
     return info
 
 
-# ---------- search and open ----------
-def quick_search(driver, wait, text):
-    """Type `text` into the top quick-search box and return the rendered suggestions text."""
-    box = wait.until(EC.element_to_be_clickable(SEARCH_BOX))
-    box.clear()
-    box.send_keys(text)
-    time.sleep(3)
-    return driver.find_element(*SEARCH_RESULTS).text
-
-
+# search and open
 def search_finds(driver, wait, name, tries=1):
     """True if quick search lists `name`."""
     for _ in range(tries):
         driver.get(EXPLORER_URL)
-        if name in quick_search(driver, wait, name):
+        box = wait.until(EC.element_to_be_clickable(SEARCH_BOX))
+        box.clear()
+        box.send_keys(name)
+        time.sleep(3)
+        if name in driver.find_element(*SEARCH_RESULTS).text:
             return True
         time.sleep(3)
     return False
@@ -1211,7 +1185,7 @@ def explorer_has(driver, wait, doc_type, name):
     return False
 
 
-# ---------- related files & versions ----------
+# related files & versions
 def add_version(driver, wait, suffix="v2"):
     """Open the Add Version modal, attach a PDF, set the extended name and version, and click Upload."""
     _, path = unique_copy(find_sample_file("pdf")[1])
@@ -1266,20 +1240,7 @@ def show_versions(driver, wait, version_text):
         time.sleep(2)
 
 
-def link_related(driver, wait, other_name):
-    """Link `other_name` in Related Files on the open document page."""
-    click_label(driver, wait, "related files")
-    click_label(driver, wait, "add")
-    time.sleep(2)
-    box = wait.until(EC.visibility_of_element_located((By.XPATH, f"{MODAL}//input[@type='text' or @type='search']")))
-    box.send_keys(other_name)
-    time.sleep(3)
-    row = driver.find_element(By.XPATH, f"//*[self::tr or self::li][contains(., {xpath_text(other_name)})]")
-    click(driver, row.find_element(By.XPATH, ".//input[@type='checkbox']/.. | .//input[@type='checkbox']"))
-    return do(driver, wait, "link")
-
-
-# ---------- test runner ----------
+# test runner
 def start_browser():
     options = Options()
     options.add_experimental_option(
@@ -1334,9 +1295,3 @@ def run(test_case_id, scenarios):
 
     write_result(test_case_id, actual, status)
     print(f"\n{test_case_id}: {status}")
-
-
-try:
-    import tc011_Multiple_Doc_Up_helper as h  # noqa: E402
-except ImportError:
-    pass
