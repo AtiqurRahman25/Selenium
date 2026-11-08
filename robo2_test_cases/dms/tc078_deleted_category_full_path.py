@@ -4,30 +4,31 @@ Deleted Category Full Path
 1. Go to https://ecmv6.robo2mation.com/dms/document/deleted-root
 Categories/Doc-type full path should be shown
 """
-from datetime import datetime
+from selenium.webdriver.common.by import By
 
 import common as c
 import dms_helper as d
 
 TEST_CASE_ID = "DMS-TC078"
 
+
 def full_path(driver, wait):
-    parent = datetime.now().strftime("AUTO_PARENT_%H%M%S")
-    ok, message = d.create_category(driver, wait, parent, "category")
-    if not ok:
-        raise c.SetupError(f"could not create the parent category ({message})")
-    child = d.new_doc_type(driver, wait, parent=parent)  # inside the parent, so the full path has two parts
-    ok, message = d.delete_category(driver, wait, child)
+    name = d.new_doc_type(driver, wait)
+    ok, message = d.delete_category(driver, wait, name)
     if not ok:
         raise c.SetupError(f"could not delete the doc-type ({message})")
 
     driver.get(c.DELETED_ROOT_URL)
-    row = c.find_by_label(driver, child, slack=300)
-    if row is None:
-        return False, f"'{child}' not found in the deleted list"
-    text = row.text
-    ok = parent.lower() in text.lower()
-    return ok, f"Deleted doc-type is shown as '{' '.join(text.split())}'" + ("" if ok else f" (the parent '{parent}' is missing from the path)")
+
+    # the list is loaded by JavaScript, so wait for OUR row
+    row = wait.until(lambda dr: next(iter(dr.find_elements(
+        By.XPATH, f"//tr[contains(@class,'clickie')][td[1][normalize-space()='{name}']]")), None))
+
+    path = row.find_elements(By.TAG_NAME, "td")[-1].text.strip()   # last column = Full Path
+    expected = f"/{name}/"
+    if path == expected:
+        return True, f"Full path of the deleted doc-type is shown as '{path}'"
+    return False, f"Full path column shows '{path}', expected '{expected}'"
 
 
 SCENARIOS = [("Full path", full_path)]
