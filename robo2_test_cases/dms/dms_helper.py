@@ -20,68 +20,97 @@ import tc011_Multiple_Doc_Up_helper as h
 
 # ---------- categorization ----------
 def select_tree_item(driver, wait, name):
-    """Select a category or doc-type node in the Categorization tree (supports D3 SVG, jsTree, and HTML)."""
-    time.sleep(2)
+    """Select a category, doc-type, or metadata row in #all_doc_list (or tree)."""
+    time.sleep(1.5)
     q = c.xpath_text(name)
 
-    def find_node(drv):
-        xpaths = [
-            f"//table[@id='all_doc_list']//tr[contains(@class, 'clickie')]/td[1][normalize-space(.)={q} or starts-with(normalize-space(.), concat({q}, ' ('))]",
-            f"//*[name()='g' and contains(@class, 'node')][.//*[name()='text' and normalize-space(.)={q}]]",
-            f"//*[name()='text' and normalize-space(.)={q}]",
-            f"//*[name()='text' and contains(normalize-space(.), {q})]",
-            f"//a[contains(@class, 'jstree-anchor') and normalize-space(.)={q}]",
-            f"//*[self::td or self::span or self::div or self::a or self::li][normalize-space(.)={q}]",
+    def find_row(drv):
+        # 1. Match the table row in #all_doc_list first (clicking the <tr> triggers row selection)
+        rows = [
+            r for r in drv.find_elements(By.XPATH, f"//table[@id='all_doc_list']//tbody//tr[contains(., {q})]")
+            if r.is_displayed()
         ]
-        for xp in xpaths:
-            els = [e for e in drv.find_elements(By.XPATH, xp) if e.is_displayed()]
-            if els:
-                return els[-1]
-        return None
+        if rows:
+            return rows[0]
+        # 2. Fallback to any matching label/cell
+        return c.find_by_label(drv, name, slack=60)
 
-    node = WebDriverWait(driver, 10).until(find_node)
-    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", node)
+    row = WebDriverWait(driver, 10).until(find_row)
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", row)
+    # Click the first <td> cell inside the row so DataTables/jQuery marks the row as selected
+    cells = row.find_elements(By.TAG_NAME, "td")
+    target = cells[0] if cells else row
     try:
-        circle = node.find_elements(By.XPATH, ".//*[name()='circle'] | ./preceding-sibling::*[name()='circle']")
-        target = circle[0] if circle else node
         ActionChains(driver).move_to_element(target).click().perform()
     except Exception:
-        c.click(driver, node)
+        c.click(driver, target)
     time.sleep(1)
-    return node
+    return row
+
+
+def _click_more_menu_item(driver, wait, item_id_or_label):
+    """Open the #more_btn dropdown if needed and click #delete_btn / #update_btn (or by label)."""
+    more_btns = c.visible(driver, "#more_btn")
+    if more_btns:
+        menu = driver.find_elements(By.ID, "more_btn_dropdown")
+        if not menu or not menu[0].is_displayed():
+            c.click(driver, more_btns[0])
+            time.sleep(0.5)
+    by_id = c.visible(driver, f"#{item_id_or_label}")
+    if by_id:
+        c.click(driver, by_id[0])
+        return
+    c.click_label(driver, wait, item_id_or_label)
 
 
 def create_category(driver, wait, name, kind="doc-type", parent=None):
-    """Categorization page: Add, choose category / doc-type, type the name, Save. Returns (True/False, message)."""
+    """Categorization page: Add, choose Category / Document, type the name, Save. Returns (True/False, message)."""
     driver.get(c.ROOT_URL)
     time.sleep(2)
     if parent:
         select_tree_item(driver, wait, parent)
-    c.click_label(driver, wait, "add")
+        c.double_click_label(driver, wait, parent)
+        time.sleep(1.5)
+
+    add_btns = c.visible(driver, "#add_btn")
+    if add_btns:
+        c.click(driver, add_btns[0])
+    else:
+        c.click_label(driver, wait, "add")
     time.sleep(1)
+
+    # Select 'Document' (for doc-type) or 'Category' in the bootstrap-select dropdown (#parent_cat_doc_field / #cat_doc_field)
+    wanted_val = "doc" if "doc" in kind.lower() else "cat"
+    wanted_txt = "Document" if wanted_val == "doc" else "Category"
+    driver.execute_script(
+        """
+        var val = arguments[0];
+        $('select[name="type"]:visible, #parent_cat_doc_field, #cat_doc_field').each(function() {
+            $(this).val(val).trigger('change');
+            if ($.fn.selectpicker) { $(this).selectpicker('refresh'); }
+        });
+        """,
+        wanted_val,
+    )
     try:
-        target_label = "Document" if "doc" in kind.lower() else "Category"
         toggle = c.visible(driver, ".modal.in button.dropdown-toggle, .modal.show button.dropdown-toggle")
-        if toggle:
+        if toggle and wanted_txt.lower() not in (toggle[0].get_attribute("title") or "").lower():
             c.click(driver, toggle[0])
             time.sleep(0.5)
-            opts = c.visible(driver, ".modal.in .dropdown-menu.open a, .modal.show .dropdown-menu.open a")
-            match = [o for o in opts if target_label.lower() in o.text.lower()]
-            if match:
-                c.click(driver, match[0])
+            opt = [
+                a for a in c.visible(driver, ".modal.in .dropdown-menu.open li a, .modal.show .dropdown-menu.open li a")
+                if wanted_txt.lower() in a.text.lower()
+            ]
+            if opt:
+                c.click(driver, opt[0])
                 time.sleep(0.5)
-        else:
-            kind_el = c.find_by_label(driver, kind)
-            if kind_el and "deleted" not in (kind_el.get_attribute("href") or "").lower():
-                c.click(driver, kind_el)
     except Exception:
         pass
+
     box = WebDriverWait(driver, 10).until(lambda drv: c.modal_text_input(drv) or c.find_field(drv, "name"))
     box.clear()
     box.send_keys(name)
-    ok, msg = c.do(driver, wait, "save")
-    time.sleep(1)
-    return ok, msg
+    return c.do(driver, wait, "save")
 
 
 def new_doc_type(driver, wait, parent=None):
@@ -101,78 +130,60 @@ def input_with_value(driver, value):
 
 
 def delete_category(driver, wait, name):
+    """Select the category/doc-type row on /dms/document/root, open More -> Delete, and confirm."""
     driver.get(c.ROOT_URL)
     time.sleep(2)
-    print(f"   [debug] URL after driver.get(ROOT_URL): {driver.current_url}")
-    avail = c.visible(driver, "#available_categories")
-    if avail:
-        print("   [debug] Clicking #available_categories to switch back to Categorization tree")
-        c.click(driver, avail[0])
-        time.sleep(2)
-
-    try:
-        node = select_tree_item(driver, wait, name)
-        print(f"   [debug] Selected tree node for {name!r}: tag=<{node.tag_name}> text={node.text!r}")
-    except Exception:
-        texts = [e.text.strip() for e in driver.find_elements(By.XPATH, "//*[name()='text' or self::a or self::button]") if e.is_displayed() and e.text.strip()]
-        print(f"   [debug] Could not find node {name!r}! Visible texts on page: {texts[:30]}")
-        raise
-
-    def find_delete_btn(drv):
-        for el in drv.find_elements(
-            By.CSS_SELECTOR,
-            "#delete, #delete_btn, #delete_category, #delete_doc_type, #remove_node, "
-            "button[id*='delete' i], a[id*='delete' i], button[data-type*='delete' i], "
-            "button[title*='Delete' i], a[title*='Delete' i], "
-            "button[data-original-title*='Delete' i], a[data-original-title*='Delete' i], "
-            "#content .fa-trash, #content .fa-trash-can, #content .fa-trash-o, #content .zmdi-delete",
-        ):
-            if not el.is_displayed():
-                continue
-            if el.find_elements(By.XPATH, "ancestor-or-self::*[@id='deleted_categories']"):
-                continue
-            info = " ".join(
-                str(el.get_attribute(a) or "")
-                for a in ("id", "class", "title", "data-original-title", "href")
-            ).lower() + " " + (el.text or "").lower()
-            if "deleted" not in info and "permanent" not in info and "search" not in info:
-                return el
-        return c.find_by_label(drv, "delete")
+    select_tree_item(driver, wait, name)
 
     def action():
-        more = c.visible(driver, "#more_btn")
-        if more and not c.visible(driver, "#delete_btn"):
-            c.click(driver, more[0])
-            time.sleep(0.5)
-        btn = WebDriverWait(driver, 10).until(
-            lambda drv: (c.visible(drv, "#delete_btn") or [None])[0] or find_delete_btn(drv)
-        )
-        c.click(driver, btn)
+        _click_more_menu_item(driver, wait, "delete_btn")
         time.sleep(1)
         c.confirm(driver, wait, "yes", seconds=15)
 
-    try:
-        return c.message_after(driver, action)
-    except Exception as e:
-        return False, f"Delete toast did not appear ({c.short(e)})"
+    return c.message_after(driver, action)
 
 
-def create_metadata(driver, wait, doc_type, display_name, data_type="text"):
-    """Double click the doc-type, click Add, give name / display name / order / data type, Save."""
+def create_metadata(driver, wait, doc_type, display_name, data_type="String"):
+    """Double click the doc-type, click Add, fill Name / Display Name / Min / Max / Order, and Save."""
     driver.get(c.ROOT_URL)
-    select_tree_item(driver, wait, doc_type)
-    c.double_click_label(driver, wait, doc_type)
     time.sleep(2)
-    c.click_label(driver, wait, "add")
+    row = select_tree_item(driver, wait, doc_type)
+    # Double-click the row (or its first cell) to open the doc-type's metadata list
+    cells = row.find_elements(By.TAG_NAME, "td")
+    ActionChains(driver).double_click(cells[0] if cells else row).perform()
+    time.sleep(2)
+
+    add_btns = c.visible(driver, "#add_btn")
+    if add_btns:
+        c.click(driver, add_btns[0])
+    else:
+        c.click_label(driver, wait, "add")
+    wait.until(EC.visibility_of_element_located((By.ID, "add_new_metafield")))
     time.sleep(1)
-    c.fill_field(driver, "name", display_name.lower().replace(" ", "_"))
+
+    # Map 'text' -> 'String' since #add_meta_type options are: Integer, Float, String, TextArea, Date, DropDown
+    dtype_map = {"text": "String", "string": "String", "int": "Integer", "integer": "Integer", "textarea": "TextArea", "date": "Date", "float": "Float", "dropdown": "DropDown"}
+    mapped_type = dtype_map.get(data_type.lower(), data_type)
+
+    meta_name = re.sub(r"[^a-zA-Z0-9_]", "_", display_name.lower()).strip("_")
+    c.fill_field(driver, "name", meta_name)
     c.fill_field(driver, "display name", display_name)
+
     try:
-        c.fill_field(driver, "order", "1")
+        c.pick_option(driver, "data type", mapped_type)
+        time.sleep(0.5)
     except Exception:
         pass
-    c.pick_option(driver, "data type", data_type)
-    return c.do(driver, wait, "save")
+
+    # If Minimum and Maximum fields are visible (mandatory for String/Integer/Float), fill them!
+    for fid, val in (("min_field", "1"), ("max_field", "50")):
+        boxes = c.visible(driver, f"#{fid}")
+        if boxes and not boxes[0].get_attribute("value"):
+            boxes[0].clear()
+            boxes[0].send_keys(val)
+
+    save_btns = c.visible(driver, "#save_metafield")
+    return c.message_after(driver, lambda: c.click(driver, save_btns[0])) if save_btns else c.do(driver, wait, "save")
 
 
 def new_metadata(driver, wait, doc_type, label="Meta"):
