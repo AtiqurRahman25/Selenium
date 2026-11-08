@@ -525,16 +525,26 @@ def double_click_label(driver, wait, label):
     ActionChains(driver).double_click(element).perform()
 
 
-def confirm(driver, wait, label="yes", seconds=6):
+def confirm(driver, wait, label="yes", seconds=15):
     """Click the confirmation button in a SweetAlert or Bootstrap modal. Returns False if none appeared."""
-    def button(d):
+    def shown_button(d):
         for b in d.find_elements(By.CSS_SELECTOR, ".swal2-confirm, .swal2-modal button, .modal.in button, .modal.show button"):
             if b.is_displayed() and (label in b.text.lower() or "swal2-confirm" in (b.get_attribute("class") or "")):
                 return b
         return None
 
+    def enabled_button(d):
+        b = shown_button(d)
+        if not (b and b.is_enabled() and "disabled" not in (b.get_attribute("class") or "").lower()):
+            return None
+        bars = [p for p in d.find_elements(By.ID, "progressBar") if p.is_displayed()]
+        if bars and bars[0].get_attribute("value") != bars[0].get_attribute("max"):
+            return None
+        return b
+
     try:
-        click(driver, WebDriverWait(driver, seconds).until(button))
+        WebDriverWait(driver, min(seconds, 5)).until(shown_button)
+        click(driver, WebDriverWait(driver, seconds).until(enabled_button))
         return True
     except Exception:
         return False

@@ -9,6 +9,7 @@ import re
 import time
 from datetime import datetime
 
+from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -19,24 +20,68 @@ import tc011_Multiple_Doc_Up_helper as h
 
 # ---------- categorization ----------
 def select_tree_item(driver, wait, name):
-    c.click_label(driver, wait, name, slack=60)
+    """Select a category or doc-type node in the Categorization tree (supports D3 SVG, jsTree, and HTML)."""
+    time.sleep(2)
+    q = c.xpath_text(name)
+
+    def find_node(drv):
+        xpaths = [
+            f"//table[@id='all_doc_list']//tr[contains(@class, 'clickie')]/td[1][normalize-space(.)={q} or starts-with(normalize-space(.), concat({q}, ' ('))]",
+            f"//*[name()='g' and contains(@class, 'node')][.//*[name()='text' and normalize-space(.)={q}]]",
+            f"//*[name()='text' and normalize-space(.)={q}]",
+            f"//*[name()='text' and contains(normalize-space(.), {q})]",
+            f"//a[contains(@class, 'jstree-anchor') and normalize-space(.)={q}]",
+            f"//*[self::td or self::span or self::div or self::a or self::li][normalize-space(.)={q}]",
+        ]
+        for xp in xpaths:
+            els = [e for e in drv.find_elements(By.XPATH, xp) if e.is_displayed()]
+            if els:
+                return els[-1]
+        return None
+
+    node = WebDriverWait(driver, 10).until(find_node)
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", node)
+    try:
+        circle = node.find_elements(By.XPATH, ".//*[name()='circle'] | ./preceding-sibling::*[name()='circle']")
+        target = circle[0] if circle else node
+        ActionChains(driver).move_to_element(target).click().perform()
+    except Exception:
+        c.click(driver, node)
     time.sleep(1)
+    return node
 
 
 def create_category(driver, wait, name, kind="doc-type", parent=None):
     """Categorization page: Add, choose category / doc-type, type the name, Save. Returns (True/False, message)."""
     driver.get(c.ROOT_URL)
+    time.sleep(2)
     if parent:
         select_tree_item(driver, wait, parent)
     c.click_label(driver, wait, "add")
     time.sleep(1)
     try:
-        c.click_label(driver, wait, kind)
+        target_label = "Document" if "doc" in kind.lower() else "Category"
+        toggle = c.visible(driver, ".modal.in button.dropdown-toggle, .modal.show button.dropdown-toggle")
+        if toggle:
+            c.click(driver, toggle[0])
+            time.sleep(0.5)
+            opts = c.visible(driver, ".modal.in .dropdown-menu.open a, .modal.show .dropdown-menu.open a")
+            match = [o for o in opts if target_label.lower() in o.text.lower()]
+            if match:
+                c.click(driver, match[0])
+                time.sleep(0.5)
+        else:
+            kind_el = c.find_by_label(driver, kind)
+            if kind_el and "deleted" not in (kind_el.get_attribute("href") or "").lower():
+                c.click(driver, kind_el)
     except Exception:
-        pass  # the page may not ask for the kind
+        pass
     box = WebDriverWait(driver, 10).until(lambda drv: c.modal_text_input(drv) or c.find_field(drv, "name"))
+    box.clear()
     box.send_keys(name)
-    return c.do(driver, wait, "save")
+    ok, msg = c.do(driver, wait, "save")
+    time.sleep(1)
+    return ok, msg
 
 
 def new_doc_type(driver, wait, parent=None):
@@ -57,8 +102,59 @@ def input_with_value(driver, value):
 
 def delete_category(driver, wait, name):
     driver.get(c.ROOT_URL)
-    select_tree_item(driver, wait, name)
-    return c.do(driver, wait, "delete", "yes")
+    time.sleep(2)
+    print(f"   [debug] URL after driver.get(ROOT_URL): {driver.current_url}")
+    avail = c.visible(driver, "#available_categories")
+    if avail:
+        print("   [debug] Clicking #available_categories to switch back to Categorization tree")
+        c.click(driver, avail[0])
+        time.sleep(2)
+
+    try:
+        node = select_tree_item(driver, wait, name)
+        print(f"   [debug] Selected tree node for {name!r}: tag=<{node.tag_name}> text={node.text!r}")
+    except Exception:
+        texts = [e.text.strip() for e in driver.find_elements(By.XPATH, "//*[name()='text' or self::a or self::button]") if e.is_displayed() and e.text.strip()]
+        print(f"   [debug] Could not find node {name!r}! Visible texts on page: {texts[:30]}")
+        raise
+
+    def find_delete_btn(drv):
+        for el in drv.find_elements(
+            By.CSS_SELECTOR,
+            "#delete, #delete_btn, #delete_category, #delete_doc_type, #remove_node, "
+            "button[id*='delete' i], a[id*='delete' i], button[data-type*='delete' i], "
+            "button[title*='Delete' i], a[title*='Delete' i], "
+            "button[data-original-title*='Delete' i], a[data-original-title*='Delete' i], "
+            "#content .fa-trash, #content .fa-trash-can, #content .fa-trash-o, #content .zmdi-delete",
+        ):
+            if not el.is_displayed():
+                continue
+            if el.find_elements(By.XPATH, "ancestor-or-self::*[@id='deleted_categories']"):
+                continue
+            info = " ".join(
+                str(el.get_attribute(a) or "")
+                for a in ("id", "class", "title", "data-original-title", "href")
+            ).lower() + " " + (el.text or "").lower()
+            if "deleted" not in info and "permanent" not in info and "search" not in info:
+                return el
+        return c.find_by_label(drv, "delete")
+
+    def action():
+        more = c.visible(driver, "#more_btn")
+        if more and not c.visible(driver, "#delete_btn"):
+            c.click(driver, more[0])
+            time.sleep(0.5)
+        btn = WebDriverWait(driver, 10).until(
+            lambda drv: (c.visible(drv, "#delete_btn") or [None])[0] or find_delete_btn(drv)
+        )
+        c.click(driver, btn)
+        time.sleep(1)
+        c.confirm(driver, wait, "yes", seconds=15)
+
+    try:
+        return c.message_after(driver, action)
+    except Exception as e:
+        return False, f"Delete toast did not appear ({c.short(e)})"
 
 
 def create_metadata(driver, wait, doc_type, display_name, data_type="text"):
@@ -123,14 +219,14 @@ def new_method(driver, wait, record_type="multiple record"):
 # ---------- My Documents (explorer) ----------
 DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}[-/ ][A-Za-z]{3}[-/ ,]+\d{4}|\d{1,2}/\d{1,2}/\d{4}")
 
-
 DATE_FORMATS = ("%Y-%m-%d", "%d-%b-%Y", "%d %b %Y", "%d/%m/%Y", "%d-%b, %Y", "%d %b, %Y", "%b %d, %Y")
 
-
-SORT_LABELS = {("name", False): ("name ascending", "name asc", "name (a-z)", "a-z"),
-               ("name", True): ("name descending", "name desc", "name (z-a)", "z-a"),
-               ("date", False): ("date ascending", "date asc", "oldest"),
-               ("date", True): ("date descending", "date desc", "newest", "latest")}
+SORT_LABELS = {
+    ("name", False): ("name ascending", "name asc", "name (a-z)", "a-z"),
+    ("name", True): ("name descending", "name desc", "name (z-a)", "z-a"),
+    ("date", False): ("date ascending", "date asc", "oldest"),
+    ("date", True): ("date descending", "date desc", "newest", "latest"),
+}
 
 
 def parse_date(text):
