@@ -6,6 +6,8 @@ Keep this file in the same folder as common.py.
 """
 import os
 import re
+import shutil
+import tempfile
 import time
 from datetime import datetime
 
@@ -498,8 +500,12 @@ def bulk_submit(driver, wait, term, csv_path, files=()):
         return False, c.popup_text(driver)
 
     if files:
-        driver.find_element(By.ID, "uploadable_files").send_keys("\n".join(files))
-        time.sleep(1)
+        # #uploadable_files picks a whole folder (it can not hold several files), so copy the files into one folder
+        folder = tempfile.mkdtemp(prefix="AUTO_bulk_")
+        for path in files:
+            shutil.copy(path, folder)
+        driver.find_element(By.ID, "uploadable_files").send_keys(folder)
+        time.sleep(2)
     try:
         ok, message = c.message_after(driver, lambda: c.click(driver, driver.find_element(By.ID, "start_upload")))
     except UnexpectedAlertPresentException as error:
