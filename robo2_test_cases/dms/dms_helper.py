@@ -143,8 +143,33 @@ def delete_category(driver, wait, name):
     return c.message_after(driver, action)
 
 
-def create_metadata(driver, wait, doc_type, display_name, data_type="String"):
-    """Double click the doc-type, click Add, fill Name / Display Name / Min / Max / Order, and Save."""
+def next_metadata_order(driver):
+    """Next free Order number: highest Order in the doc-type's meta-data list + 1 (1 when the list is empty)."""
+    used = []
+    for row in driver.find_elements(By.CSS_SELECTOR, "tr.clickie[data-type='meta']"):
+        cells = row.find_elements(By.TAG_NAME, "td")
+        # list columns: Title, Display Name, Order, Data Type, Unique, Required
+        if len(cells) > 2 and cells[2].text.strip().isdigit():
+            used.append(int(cells[2].text.strip()))
+    return max(used) + 1 if used else 1
+
+
+def set_metadata_order(driver, order):
+    """Pick the Order value in the Add Meta field form (#meta_order, a bootstrap-select dropdown)."""
+    driver.execute_script(
+        """
+        var s = document.getElementById('meta_order');
+        s.value = arguments[0];
+        if (window.$ && $.fn.selectpicker) { $(s).selectpicker('refresh'); }
+        s.dispatchEvent(new Event('change', {bubbles: true}));
+        """,
+        str(order),
+    )
+
+
+def create_metadata(driver, wait, doc_type, display_name, data_type="String", order=None):
+    """Double click the doc-type, click Add, fill Name / Display Name / Min / Max / Order, and Save.
+    order=None uses the next free Order number, so a second meta-data never clashes with the first."""
     driver.get(c.ROOT_URL)
     time.sleep(2)
     row = select_tree_item(driver, wait, doc_type)
@@ -152,6 +177,10 @@ def create_metadata(driver, wait, doc_type, display_name, data_type="String"):
     cells = row.find_elements(By.TAG_NAME, "td")
     ActionChains(driver).double_click(cells[0] if cells else row).perform()
     time.sleep(2)
+
+    # Orders already used by this doc-type (read before the Add form opens)
+    if order is None:
+        order = next_metadata_order(driver)
 
     add_btns = c.visible(driver, "#add_btn")
     if add_btns:
@@ -175,6 +204,9 @@ def create_metadata(driver, wait, doc_type, display_name, data_type="String"):
     except Exception:
         pass
 
+    # Order must be unique inside the doc-type
+    set_metadata_order(driver, order)
+
     # If Minimum and Maximum fields are visible (mandatory for String/Integer/Float), fill them!
     for fid, val in (("min_field", "1"), ("max_field", "50")):
         boxes = c.visible(driver, f"#{fid}")
@@ -186,9 +218,9 @@ def create_metadata(driver, wait, doc_type, display_name, data_type="String"):
     return c.message_after(driver, lambda: c.click(driver, save_btns[0])) if save_btns else c.do(driver, wait, "save")
 
 
-def new_metadata(driver, wait, doc_type, label="Meta"):
+def new_metadata(driver, wait, doc_type, label="Meta", order=None):
     display = datetime.now().strftime(f"AUTO {label} %H%M%S")
-    ok, message = create_metadata(driver, wait, doc_type, display)
+    ok, message = create_metadata(driver, wait, doc_type, display, order=order)
     if not ok:
         raise c.SetupError(f"meta-data could not be created ({message})")
     return display
