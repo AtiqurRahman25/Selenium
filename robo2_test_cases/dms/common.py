@@ -15,7 +15,7 @@ from datetime import datetime
 import openpyxl
 from dotenv import load_dotenv
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -1094,6 +1094,29 @@ def new_document(driver, wait, ext="pdf", doc_type="1 FC Test updated/aa"):
     return info
 
 
+def fill_search_meta(driver, label_text, value):
+    """Fill a metadata input in the advanced search form (labels there are plain text, not <label>)."""
+    wanted = label_text.lower()
+
+    def find(d):
+        lines = d.find_elements(By.CSS_SELECTOR, "#dms_search_form .meta-data-wrap .fg-line")
+        for match in (lambda t: t == wanted, lambda t: t.startswith(wanted)):
+            for line in lines:
+                if line.is_displayed() and match(clean(line.text)):
+                    inputs = line.find_elements(By.CSS_SELECTOR, "input[id]:not([type='hidden'])")
+                    if inputs:
+                        return inputs[0]
+        return None
+
+    try:
+        field = WebDriverWait(driver, 10).until(find)
+    except TimeoutException:
+        names = [clean(l.text) for l in driver.find_elements(By.CSS_SELECTOR, "#dms_search_form .meta-data-wrap .fg-line")]
+        raise SetupError(f"search form has no metadata field '{label_text}'. Fields on page: {names}")
+    field.clear()
+    field.send_keys(value)
+
+
 def advanced_search(driver, wait, name, include_archive=False, match_all=True, doc_type=None, extra=None):
     """Fill the advanced search form and submit the search."""
     if not visible(driver, "#dms_search_form"):
@@ -1104,7 +1127,7 @@ def advanced_search(driver, wait, name, include_archive=False, match_all=True, d
     if doc_type:
         pick_select2_by_id(driver, wait, "documentType", doc_type)
     for field_label, value in (extra or []):
-        fill_field(driver, field_label, value)
+        fill_search_meta(driver, field_label, value)
     for checkbox_id, wanted in (("include_archive", include_archive), ("match_all", match_all)):
         if driver.find_element(By.ID, checkbox_id).is_selected() != wanted:
             click(driver, driver.find_element(By.CSS_SELECTOR, f"label[for='{checkbox_id}'].ts-helper"))
