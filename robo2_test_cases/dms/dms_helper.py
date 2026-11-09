@@ -9,6 +9,7 @@ import re
 import time
 from datetime import datetime
 
+from selenium.common.exceptions import NoAlertPresentException, TimeoutException, UnexpectedAlertPresentException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -400,23 +401,43 @@ def pick_bulk_doc_type(driver, wait, term):
         raise c.SetupError(f"doc-type '{typed}' could not be selected for bulk upload")
 
 
+def wait_new_download(before, started, seconds=30):
+    """Newest finished file in DOWNLOAD_DIR that is new, or was written again (same name) since `started`."""
+    end = time.time() + seconds
+    while time.time() < end:
+        found = []
+        for name in os.listdir(c.DOWNLOAD_DIR):
+            if name.endswith((".crdownload", ".tmp")):
+                continue
+            path = os.path.join(c.DOWNLOAD_DIR, name)
+            if name not in before or os.path.getmtime(path) >= started - 1:
+                found.append((os.path.getmtime(path), path))
+        if found:
+            return max(found)[1]
+        time.sleep(1)
+    return None
+
+
 def download_template(driver, wait, term):
     """Bulk upload page: pick the doc-type, click Download template. Returns the downloaded file path."""
     pick_bulk_doc_type(driver, wait, term)
     # the download section is hidden until a doc-type is chosen, then filled by JavaScript
     wait.until(lambda drv: drv.find_element(By.ID, "download_template_section").is_displayed()
                and drv.find_element(By.ID, "download_template_section").get_attribute("innerHTML").strip())
+    time.sleep(1)  # let the page attach its click handler to the link
     before = set(os.listdir(c.DOWNLOAD_DIR))
-    buttons = c.visible(driver, "#download_template_section a, #download_template_section button, "
-                                "#download_template_section .btn")
-    if buttons:
-        c.click(driver, buttons[0])
-    else:
-        c.click_label(driver, wait, "download")
-    name = c.wait_for_download(before)
-    if not name:
-        raise Exception("template was not downloaded")
-    return os.path.join(c.DOWNLOAD_DIR, name)
+    for _ in range(2):  # click again once if nothing was downloaded
+        started = time.time()
+        buttons = c.visible(driver, "#download_template_section a, #download_template_section button, "
+                                    "#download_template_section .btn")
+        if buttons:
+            c.click(driver, buttons[0])
+        else:
+            c.click_label(driver, wait, "download")
+        path = wait_new_download(before, started, seconds=15)
+        if path:
+            return path
+    raise Exception("template was not downloaded")
 
 
 def template_header(path):
@@ -436,14 +457,61 @@ def write_csv(path, header, rows):
     return path
 
 
+def alert_message(driver, error=None):
+    """Text of a JavaScript alert: from the exception when Selenium already closed it, or from the open alert."""
+    text = getattr(error, "alert_text", None) or ""
+    if not text:
+        try:
+            alert = driver.switch_to.alert
+            text = alert.text
+            alert.accept()
+        except NoAlertPresentException:
+            pass
+    return (text or "").strip()
+
+
 def bulk_submit(driver, wait, term, csv_path, files=()):
-    """Pick the doc-type, attach the CSV (and files), click Upload. Returns (True/False, message)."""
+    """Pick the doc-type, attach the CSV, and start the upload.
+    Returns (True/False, message): True when the upload went through, False when the page refused the file or
+    reported errors. The message is what the page said (alert, popup, CSV data rows, Bulk Upload Report)."""
     pick_bulk_doc_type(driver, wait, term)
-    c.attach_to_file_input(driver, wait, csv_path)
-    for path in files:
-        c.attach_to_file_input(driver, wait, path)
-    time.sleep(2)
-    return c.do(driver, wait, "upload")
+    # the CSV goes into #csv_file; #uploadable_files (last file input on the page) is for the documents
+    csv_input = driver.find_element(By.ID, "csv_file")
+    driver.execute_script("arguments[0].style.display='block'; arguments[0].style.visibility='visible';", csv_input)
+
+    def section_shown(drv):
+        return drv.find_element(By.ID, "csv_file_section").is_displayed()
+
+    # the page either shows an alert / message, or reads the CSV and opens the "CSV File Data" section
+    try:
+        csv_input.send_keys(csv_path)
+        time.sleep(1)
+        alert = alert_message(driver)
+        if alert:
+            return False, f"alert: {alert}"
+        WebDriverWait(driver, 10).until(lambda drv: section_shown(drv) or c.popup_text(drv))
+    except UnexpectedAlertPresentException as error:
+        return False, f"alert: {alert_message(driver, error)}"
+    except TimeoutException:
+        return False, "the CSV file was not accepted and the page showed no message"
+    if not section_shown(driver):
+        return False, c.popup_text(driver)
+
+    if files:
+        driver.find_element(By.ID, "uploadable_files").send_keys("\n".join(files))
+        time.sleep(1)
+    try:
+        ok, message = c.message_after(driver, lambda: c.click(driver, driver.find_element(By.ID, "start_upload")))
+    except UnexpectedAlertPresentException as error:
+        ok, message = False, f"alert: {alert_message(driver, error)}"
+    except TimeoutException:
+        ok, message = False, c.popup_text(driver)
+    rows = " ".join(driver.find_element(By.ID, "csv_file_data").text.split())
+    report = " ".join(driver.find_element(By.ID, "download_report").text.split())
+    text = " | ".join(part for part in (message, rows, report) if part)
+    if re.search(r"error|fail|invalid|already|required", text.lower()):
+        ok = False
+    return ok, text
 
 
 # ---------- saved search ----------
