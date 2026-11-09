@@ -371,17 +371,48 @@ def create_text_watermark(driver, wait, text):
 
 # ---------- bulk upload ----------
 def pick_bulk_doc_type(driver, wait, term):
+    """Bulk upload page: open the Document Type drop-down, type the doc-type name, pick the matching result."""
     driver.get(c.BULK_URL)
-    wait.until(lambda drv: c.visible(drv, "span.select2-selection"))
-    c.pick_select2(driver, wait, term[:5])
+    select_id = "document_type_bulk_upload"
+    box = wait.until(EC.element_to_be_clickable(
+        (By.CSS_SELECTOR, f"span.select2-selection[aria-labelledby='select2-{select_id}-container']")))
+    c.click(driver, box)
+    search = wait.until(EC.visibility_of_element_located((
+        By.XPATH,
+        f"//ul[@id='select2-{select_id}-results']/ancestor::span[contains(@class, 'select2-dropdown')]"
+        "//input[contains(@class, 'select2-search__field')]")))
+    search.click()  # give the search box focus, so the typing reaches it
+    typed = term.strip().strip("/").split("/")[-1]
+    for letter in typed[:30]:
+        search.send_keys(letter)
+        time.sleep(0.2)
+
+    option_css = f"#select2-{select_id}-results .select2-results__option"
+    WebDriverWait(driver, 15).until(lambda drv: bool(c.select2_options(drv, option_css)))
+    time.sleep(1.5)
+    options = c.select2_options(driver, option_css)
+    option = options[c.best_option_index(options, term)]
+    ActionChains(driver).move_to_element(option).click().perform()
     time.sleep(1)
+
+    shown = driver.find_element(By.ID, f"select2-{select_id}-container").text.lower()
+    if not shown.strip() or "search for" in shown:
+        raise c.SetupError(f"doc-type '{typed}' could not be selected for bulk upload")
 
 
 def download_template(driver, wait, term):
     """Bulk upload page: pick the doc-type, click Download template. Returns the downloaded file path."""
     pick_bulk_doc_type(driver, wait, term)
+    # the download section is hidden until a doc-type is chosen, then filled by JavaScript
+    wait.until(lambda drv: drv.find_element(By.ID, "download_template_section").is_displayed()
+               and drv.find_element(By.ID, "download_template_section").get_attribute("innerHTML").strip())
     before = set(os.listdir(c.DOWNLOAD_DIR))
-    c.click_label(driver, wait, "download")
+    buttons = c.visible(driver, "#download_template_section a, #download_template_section button, "
+                                "#download_template_section .btn")
+    if buttons:
+        c.click(driver, buttons[0])
+    else:
+        c.click_label(driver, wait, "download")
     name = c.wait_for_download(before)
     if not name:
         raise Exception("template was not downloaded")
