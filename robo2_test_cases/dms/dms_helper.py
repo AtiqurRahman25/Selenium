@@ -371,6 +371,33 @@ def new_method(driver, wait, record_type="multiple record"):
     return name
 
 
+def update_method(driver, wait, name, new_name):
+    """Method list: click Edit on the method's card, change the Method Title, Save. Returns (True/False, message)."""
+    card_xpath = (f"//div[contains(concat(' ', normalize-space(@class), ' '), ' mtm-list-card ')"
+                  f" and .//span[@title={c.xpath_text(name)}]]")
+    try:
+        card = WebDriverWait(driver, 10).until(lambda drv: next(iter(drv.find_elements(By.XPATH, card_xpath)), None))
+        c.click(driver, card.find_element(By.CSS_SELECTOR, "a.mtm_edit_button"))
+        wait.until(EC.visibility_of_element_located((By.ID, "mtm_creation_main_form")))
+        title = driver.find_element(By.CSS_SELECTOR, f'{MTM_FORM} input[name="method_name"]')
+        # the saved values are filled in by JavaScript: wait for the title and for the last populate drop-down
+        WebDriverWait(driver, 15).until(lambda drv: title.get_attribute("value") == name)
+        WebDriverWait(driver, 15).until(lambda drv: drv.execute_script(
+            "var s = document.querySelector(arguments[0]); return !!s && !!s.value;",
+            f'{MTM_FORM} select[name="mtm_populate_metadata_field"]'))
+    except TimeoutException:
+        raise c.SetupError(f"the edit form of method '{name}' did not open or fill in")
+    title.clear()
+    title.send_keys(new_name)
+    try:
+        save = driver.find_element(By.ID, "save_mtm_dms")
+        ok, message = c.message_after(driver, lambda: c.click(driver, save))
+    except TimeoutException:
+        raise c.SetupError(f"method '{name}' was not updated. The form says: {form_problems(driver) or 'nothing'}")
+    listed = c.wait_text(driver, new_name, 8)
+    return ok and listed, message + ("" if listed else f". '{new_name}' is not in the method list")
+
+
 # ---------- My Documents (explorer) ----------
 DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}[-/ ][A-Za-z]{3}[-/ ,]+\d{4}|\d{1,2}/\d{1,2}/\d{4}")
 
