@@ -230,28 +230,137 @@ def new_metadata(driver, wait, doc_type, label="Meta", order=None):
 
 
 # ---------- master table method ----------
-def create_method(driver, wait, record_type="multiple record"):
-    """Add Method icon: choose the record type, fill the required fields, Save. Returns (True/False, message, method name)."""
-    driver.get(c.MASTER_TABLE_URL)
-    c.click_label(driver, wait, "add method")
-    time.sleep(2)
+MTM_FORM = "#mtm_creation_main_form"
+
+# Choose an option in a (bootstrap-select) drop-down: by option text or value, or the first real option
+PICK_OPTION_JS = """
+var s = document.querySelector(arguments[0]);
+if (!s) { return ''; }
+var want = (arguments[1] || '').toLowerCase();
+var chosen = null;
+for (var i = 0; i < s.options.length; i++) {
+    var o = s.options[i];
+    if (o.disabled || !o.value) { continue; }
+    if (!want || o.text.trim().toLowerCase() === want || o.value.toLowerCase() === want) { chosen = o; break; }
+}
+if (!chosen) { return ''; }
+s.value = chosen.value;
+if (window.$) {
+    $(s).trigger('change');
+    if ($.fn.selectpicker) { $(s).selectpicker('refresh'); }
+} else {
+    s.dispatchEvent(new Event('change', {bubbles: true}));
+}
+return chosen.text.trim();
+"""
+
+
+# Names of the master tables in the drop-down of the method form
+LIST_MASTER_TABLES_JS = """
+return Array.from(document.querySelectorAll(arguments[0] + ' select[name="master_table"] option'))
+    .filter(function(o) { return o.value && !o.disabled; })
+    .map(function(o) { return o.text.trim(); });
+"""
+
+
+def mtm_choose(driver, name, want=None, seconds=10):
+    """Choose an option of a drop-down of the method form. Waits, because some lists are filled after another pick."""
+    css = f'{MTM_FORM} select[name="{name}"]'
     try:
-        c.click_label(driver, wait, record_type)
-    except Exception:
-        pass
+        return WebDriverWait(driver, seconds, poll_frequency=0.5).until(
+            lambda drv: drv.execute_script(PICK_OPTION_JS, css, want or ""))
+    except TimeoutException:
+        raise c.SetupError(f"the '{name}' drop-down of the method form has no option" + (f" '{want}'" if want else ""))
+
+
+def mtm_field_visible(driver, name):
+    return driver.execute_script(
+        "var s = document.querySelector(arguments[0]); var box = s && s.closest('.col-container'); "
+        "return !!box && box.offsetParent !== null;", f'{MTM_FORM} select[name="{name}"]')
+
+
+def mtm_pick_master_table(driver):
+    """Master Table: MTM_MASTER_TABLE from .env, or the first master table that has fields to match on."""
+    wanted = os.getenv("MTM_MASTER_TABLE")
+    if wanted:
+        return mtm_choose(driver, "master_table", wanted)
+    names = driver.execute_script(LIST_MASTER_TABLES_JS, MTM_FORM)
+    for name in names[:15]:
+        mtm_choose(driver, "master_table", name)
+        try:
+            mtm_choose(driver, "mtm_match_criteria_mt_field", seconds=4)  # the fields load after the table is chosen
+            return name
+        except c.SetupError:
+            continue
+    raise c.SetupError("no master table with fields was found for the method")
+
+
+def mtm_pick_doc_type(driver, wait, term):
+    """Document Type (Select2 search): type the name and click the matching result."""
+    box = wait.until(EC.element_to_be_clickable(
+        (By.CSS_SELECTOR, f"{MTM_FORM} .method_form_document_type-container span.select2-selection")))
+    c.click(driver, box)
+    search = wait.until(EC.visibility_of_element_located(
+        (By.CSS_SELECTOR, ".select2-container--open input.select2-search__field")))
+    search.click()
+    typed = term.strip().strip("/").split("/")[-1]
+    for letter in typed[:30]:
+        search.send_keys(letter)
+        time.sleep(0.2)
+    option_css = ".select2-container--open .select2-results__option"
+    WebDriverWait(driver, 15).until(lambda drv: bool(c.select2_options(drv, option_css)))
+    time.sleep(1.5)
+    options = c.select2_options(driver, option_css)
+    ActionChains(driver).move_to_element(options[c.best_option_index(options, term)]).click().perform()
+    time.sleep(1)
+    shown = driver.find_element(
+        By.CSS_SELECTOR, f"{MTM_FORM} .method_form_document_type-container .select2-selection__rendered").text.lower()
+    if not shown.strip() or "select document type" in shown:
+        raise c.SetupError(f"document type '{typed}' could not be selected in the method form")
+
+
+def form_problems(driver):
+    """Validation messages shown on the page."""
+    boxes = c.visible(driver, ".parsley-errors-list li, .parsley-custom-error-message, .validation-error-message")
+    return " | ".join(box.text.strip() for box in boxes if box.text.strip())
+
+
+def create_method(driver, wait, record_type="multiple record"):
+    """Add Method: fill the method form (title, master table, document type, output type, match criteria,
+    populate field) and Save. Returns (True/False, message, method name).
+    .env (optional): MTM_DOC_TYPE (default 'aa', needs a drop-down meta-data field), MTM_MASTER_TABLE."""
+    driver.get(c.MASTER_TABLE_URL)
+    time.sleep(2)
+    add_buttons = c.visible(driver, "#dms_method_add")
+    if add_buttons:
+        c.click(driver, add_buttons[0])
+    else:
+        c.click_label(driver, wait, "add method")
+    wait.until(EC.visibility_of_element_located((By.ID, "mtm_creation_main_form")))
+    time.sleep(1)
+
     name = datetime.now().strftime("AUTO_MT_%H%M%S")
-    modals = driver.find_elements(By.XPATH, c.MODAL)
-    panel = modals[0] if modals else driver.find_element(By.TAG_NAME, "body")
-    h.fill_required_fields(panel, driver, name[-6:])
-    h.pick_required_dropdowns(panel, driver)
-    for field in panel.find_elements(By.XPATH, ".//label[contains(., '*')]/following::select[1]"):
-        if field.is_displayed():
-            c.pick_option(driver, c.clean(field.find_element(By.XPATH, "preceding::label[1]").text))
-    box = c.find_field(driver, "method name") or c.find_field(driver, "name")
-    if box is not None:
-        box.clear()
-        box.send_keys(name)
-    ok, message = c.do(driver, wait, "save")
+    driver.find_element(By.CSS_SELECTOR, f'{MTM_FORM} input[name="method_name"]').send_keys(name)
+    try:
+        mtm_pick_master_table(driver)
+        mtm_pick_doc_type(driver, wait, os.getenv("MTM_DOC_TYPE", "aa"))
+        mtm_choose(driver, "mtm_output_type", "multiple" if "multiple" in record_type.lower() else "single")
+        time.sleep(1)
+        for field in ("mtm_fetch_all_record", "mtm_unique_fetch_record"):
+            if mtm_field_visible(driver, field):
+                mtm_choose(driver, field, "false")
+        # match criteria: table field, operator, value type = meta data field, and the meta data field
+        mtm_choose(driver, "mtm_match_criteria_mt_field")
+        mtm_choose(driver, "mtm_match_criteria_operator")
+        mtm_choose(driver, "mtm_match_criteria_value_type", "meta_data_field")
+        mtm_choose(driver, "mtm_match_criteria_metadata_field")
+        # populate field: table field -> meta data field
+        mtm_choose(driver, "mtm_populate_mt_field")
+        mtm_choose(driver, "mtm_populate_metadata_field")
+        save = driver.find_element(By.ID, "save_mtm_dms")
+        ok, message = c.message_after(driver, lambda: c.click(driver, save))
+    except TimeoutException:
+        raise c.SetupError(f"method '{name}' was not saved. The form says: {form_problems(driver) or 'nothing'}")
     return ok, message, name
 
 
