@@ -21,7 +21,7 @@ import common as c
 import tc011_Multiple_Doc_Up_helper as h
 
 
-# ---------- categorization ----------
+# categorization
 def select_tree_item(driver, wait, name):
     """Select a category, doc-type, or metadata row in #all_doc_list (or tree)."""
     time.sleep(1.5)
@@ -229,7 +229,7 @@ def new_metadata(driver, wait, doc_type, label="Meta", order=None):
     return display
 
 
-# ---------- master table method ----------
+# master table method
 MTM_FORM = "#mtm_creation_main_form"
 
 # Choose an option in a (bootstrap-select) drop-down: by option text or value, or the first real option
@@ -398,7 +398,35 @@ def update_method(driver, wait, name, new_name):
     return ok and listed, message + ("" if listed else f". '{new_name}' is not in the method list")
 
 
-# ---------- My Documents (explorer) ----------
+def delete_method(driver, wait, name):
+    """Method list: open the card's settings (gear icon) if Delete is hidden, click Delete, confirm Yes.
+    Returns (True/False, message). True when the system confirms and the method is gone from the list."""
+    card_xpath = (f"//div[contains(concat(' ', normalize-space(@class), ' '), ' mtm-list-card ')"
+                  f" and .//span[@title={c.xpath_text(name)}]]")
+    try:
+        card = WebDriverWait(driver, 10).until(lambda drv: next(iter(drv.find_elements(By.XPATH, card_xpath)), None))
+        button = card.find_element(By.CSS_SELECTOR, "button.mtm_delete_button")
+        if not button.is_displayed():
+            c.click(driver, card.find_element(By.CSS_SELECTOR, "a.mtm_setting_button"))
+            time.sleep(1)
+    except TimeoutException:
+        raise c.SetupError(f"method '{name}' was not found in the method list")
+
+    def action():
+        c.click(driver, button)
+        time.sleep(1)
+        c.confirm(driver, wait, "yes", seconds=15)
+
+    ok, message = c.message_after(driver, action)
+    try:
+        WebDriverWait(driver, 8).until(lambda drv: not drv.find_elements(By.XPATH, card_xpath))
+        gone = True
+    except TimeoutException:
+        gone = False
+    return ok and gone, message + (". Method removed from the list" if gone else ". Method still shown in the list")
+
+
+# My Documents (explorer)
 DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}[-/ ][A-Za-z]{3}[-/ ,]+\d{4}|\d{1,2}/\d{1,2}/\d{4}")
 
 DATE_FORMATS = ("%Y-%m-%d", "%d-%b-%Y", "%d %b %Y", "%d/%m/%Y", "%d-%b, %Y", "%d %b, %Y", "%b %d, %Y")
@@ -483,7 +511,7 @@ def check_sorting(items, key, descending):
     return ok, f"{len(items)} documents checked over {'all shown pages' if len(items) > 10 else 'the page'}"
 
 
-# ---------- watermark (Pending Documents page) ----------
+# watermark (Pending Documents page)
 def open_watermark_modal(driver, wait):
     modal = driver.find_element(By.ID, "add_watermark_modal")
     if not modal.is_displayed():
@@ -508,7 +536,7 @@ def create_text_watermark(driver, wait, text):
     return c.message_after(driver, lambda: c.click(driver, button))
 
 
-# ---------- bulk upload ----------
+# bulk upload
 def pick_bulk_doc_type(driver, wait, term):
     """Bulk upload page: open the Document Type drop-down, type the doc-type name, pick the matching result."""
     driver.get(c.BULK_URL)
@@ -636,7 +664,7 @@ def bulk_submit(driver, wait, term, csv_path, files=()):
         return False, c.popup_text(driver)
 
     if files:
-        # #uploadable_files picks a whole folder (it can not hold several files), so copy the files into one folder
+        #uploadable_files picks a whole folder (it can not hold several files), so copy the files into one folder
         folder = tempfile.mkdtemp(prefix="AUTO_bulk_")
         for path in files:
             shutil.copy(path, folder)
@@ -656,7 +684,7 @@ def bulk_submit(driver, wait, term, csv_path, files=()):
     return ok, text
 
 
-# ---------- saved search ----------
+# saved search
 def save_search(driver, wait, search_name, doc_name):
     """Advanced search form: fill the document name, click Save Search, give the name, Save."""
     driver.get(c.EXPLORER_URL)
@@ -672,7 +700,7 @@ def save_search(driver, wait, search_name, doc_name):
     return c.message_after(driver, action)
 
 
-# ---------- maker / checker ----------
+# maker / checker
 def review_as_checker(driver, wait, name, action):
     """Second user opens Pending For Review and approves / rejects the document. Returns (True/False, message)."""
     def review():
