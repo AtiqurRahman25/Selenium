@@ -18,16 +18,16 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 load_dotenv()
 
-# ---------- config (from .env) ----------
-BASE_URL = os.getenv("BASE_URL", "https://ecmv6.robo2mation.com")
+# config (from .env)
+BASE_URL = os.getenv("BASE_URL")
 USERNAME = os.getenv("DMS_USERNAME")
 PASSWORD = os.getenv("DMS_PASSWORD")
 EXCEL_PATH = os.getenv("EXCEL_PATH", r"D:\Selenium\robo2_test_cases\Robo2mation_26Q1_Sanity_Test_Case_Doc.xlsx")
-SAMPLE_DIR = os.getenv("SAMPLE_DIR", "test_files")  # put one file of each type here (any name)
+SAMPLE_DIR = os.getenv("SAMPLE_DIR", "test_files")  
 TESTER_NAME = os.getenv("TESTER_NAME", "Sharar")
-SCREENSHOT_DIR = os.getenv("SCREENSHOT_DIR", "screenshots")  # use your OneDrive-synced folder here
-EVIDENCE_LINK = os.getenv("EVIDENCE_LINK")                    # shared OneDrive link
-EVIDENCE_HEADER = os.getenv("EVIDENCE_HEADER", "remark").lower()  # column that holds the "Evidence Doc" link
+SCREENSHOT_DIR = os.getenv("SCREENSHOT_DIR", "screenshots")  
+EVIDENCE_LINK = os.getenv("EVIDENCE_LINK")                    
+EVIDENCE_HEADER = os.getenv("EVIDENCE_HEADER", "remark").lower()  
 
 SHEET_NAME = "DMS"
 HEADER_ROW = 4
@@ -36,7 +36,7 @@ UPLOAD_URL = BASE_URL + "/dms/document/upload/standard_upload/"
 EXTENSIONS = ["pdf", "png", "jpg", "jpeg", "svg", "gif", "mp3", "mp4", "doc", "docx",
               "xls", "xlsx", "csv", "ppt", "pptx", "msg", "eml", "txt"]
 
-# ---------- locators (adjust if the page differs) ----------
+# locators (adjust if the page differs)
 LOGIN_USER = (By.XPATH, "//input[contains(@placeholder, 'Username')]")
 LOGIN_PASS = (By.XPATH, "//input[contains(@placeholder, 'Password')]")
 FILE_INPUT = (By.CSS_SELECTOR, "input[type='file']")

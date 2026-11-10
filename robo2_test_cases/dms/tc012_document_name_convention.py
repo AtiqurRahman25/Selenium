@@ -72,7 +72,7 @@ def fill_convention_fields(driver, fields):
 
 
 def document_name_convention(driver, wait):
-    # steps 1-2: attach a document, select the doc-type, fill the required meta-data (unique values)
+    # attach a document, select the doc-type, fill the required meta-data (unique values)
     c.prepare_upload(driver, wait, "pdf", DOC_TYPE)
     selected = c.current_doc_type(driver)
     wanted = DOC_TYPE.strip().strip("/").split("/")[-1]
@@ -104,7 +104,7 @@ def document_name_convention(driver, wait):
     name = c.field_value(driver, "file_name")
     used = [v for v in values if v in name]
 
-    # step 3: click Save and check the document is saved with that name
+    # click Save and check the document is saved with that name
     ok, message = c.message_after(driver, lambda: c.click(driver, driver.find_element(*c.UPLOAD_BTN)))
     if not ok:
         return False, f"Document name was '{name}' but Save failed ({message})"

@@ -19,7 +19,7 @@ import common as c
 TEST_CASE_ID = "DMS-TC003"
 PENDING_URL = c.BASE_URL + "/dms/document/upload/standard_upload/filesave/pendingmetalist/"
 
-# ---------- locators (adjust if the page differs) ----------
+# locators
 LOWER = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')"
 GRID_VIEW = (By.XPATH, "//*[contains(@title,'Grid') or contains(@data-original-title,'Grid') or contains(@aria-label,'Grid')]")
 VIEW_ICON = ("[contains(" + LOWER.format("@title") + ", 'view document') or contains(" + LOWER.format("@data-original-title")

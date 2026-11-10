@@ -1,7 +1,6 @@
 """
 Shared helpers for the My Documents (explorer) test scripts: open a category / doc-type by path,
 choose Order By, read the list view page by page.
-Keep this file in the same folder as common.py.
 """
 import os
 import time
@@ -17,7 +16,7 @@ TREE = "left_cat_doc_explorer"
 LIST = "#explorer_file_list_view"
 NEXT = "#paginate_explorer li.page-item.next:not(.disabled) a"
 DOCUMENTS = "#main-window .file-thumb, #main-window table tbody tr, #file_manager_content table tbody tr"
-CHILDREN = "./ul/li/a[contains(@class,'jstree-anchor')]"  # direct children only
+CHILDREN = "./ul/li/a[contains(@class,'jstree-anchor')]"  
 
 
 def name_of(anchor):
@@ -26,7 +25,7 @@ def name_of(anchor):
 
 def child_anchors(scope):
     anchors = scope.find_elements(By.XPATH, CHILDREN)
-    return [a for a in anchors if not name_of(a).lower().startswith("loading")]  # skip jsTree 'Loading ...' placeholder
+    return [a for a in anchors if not name_of(a).lower().startswith("loading")]  
 
 
 def sort_name(name):

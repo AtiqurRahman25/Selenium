@@ -25,7 +25,7 @@ ATTACH_URL = c.BASE_URL + "/dms/document/upload/standard_upload/"
 PENDING_URL = c.BASE_URL + "/dms/document/upload/standard_upload/filesave/pendingmetalist/"
 FILES_TO_UPLOAD = ["png", "mp3", "docx"]  # image, media, office file
 
-# ---------- locators (taken from the page HTML) ----------
+# locators
 FILE_INPUT = (By.CSS_SELECTOR, "input[type='file']")
 DOC_TYPE_BOX = (By.CSS_SELECTOR, "span.select2-selection[aria-labelledby='select2-DocumentType-container']")
 # the page has other select2 boxes too (Share With, Notify To...), so only use the Document Type drop-down
@@ -106,10 +106,10 @@ def select_document_type(driver, wait):
         if not document_type_selected(driver):
             options = real_options(driver)
             if options:
-                driver.execute_script("arguments[0].click();", options[0])  # try a click instead
+                driver.execute_script("arguments[0].click();", options[0])  
                 time.sleep(1)
         if document_type_selected(driver):
-            time.sleep(2)  # extra meta-data fields can appear after the type is chosen
+            time.sleep(2)  
             return
     raise Exception("document type could not be selected")
 

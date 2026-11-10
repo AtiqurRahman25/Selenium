@@ -18,7 +18,7 @@ import common as c
 ATTACH_URL = c.BASE_URL + "/dms/document/upload/standard_upload/"
 PENDING_URL = c.BASE_URL + "/dms/document/upload/standard_upload/filesave/pendingmetalist/"
 
-# ---------- locators (taken from the page HTML) ----------
+# locators (taken from the page HTML)
 FILE_INPUT = (By.CSS_SELECTOR, "input[type='file']")
 DOC_TYPE_BOX = (By.CSS_SELECTOR, "span.select2-selection[aria-labelledby='select2-DocumentType-container']")
 # the page has other select2 boxes too (Share With, Notify To...), so only use the Document Type drop-down

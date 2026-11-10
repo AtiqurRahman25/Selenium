@@ -213,7 +213,7 @@ def fail(driver, test_case_id, slug, message):
     if shown and shown.lower() not in message.lower():
         message += f" - page said: {shown}"
     save_shot(driver, test_case_id, slug, "FAIL")
-    with open(os.path.join("debug", f"{test_case_id}_{slug}.html"), "w", encoding="utf-8") as file:
+    with open(os.path.join(DEBUG_DIR, f"{test_case_id}_{slug}.html"), "w", encoding="utf-8") as file:
         file.write(driver.page_source)
     return False, message
 
@@ -1408,3 +1408,7 @@ def run(test_case_id, scenarios):
 
     write_result(test_case_id, actual, status)
     print(f"\n{test_case_id}: {status}")
+
+    write_result(test_case_id, actual, status)
+    if status == "Fail":
+        raise SystemExit(1)
