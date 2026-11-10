@@ -698,7 +698,11 @@ def save_search(driver, wait, search_name, info):
 
     def action():
         c.click(driver, driver.find_element(By.ID, "save_search_name"))
-        name_box = WebDriverWait(driver, 10).until(lambda drv: c.modal_text_input(drv))
+        try:
+            name_box = WebDriverWait(driver, 4).until(lambda drv: c.modal_text_input(drv))
+        except TimeoutException:
+            driver.execute_script("$('#save_search_name').click();")
+            name_box = WebDriverWait(driver, 10).until(lambda drv: c.modal_text_input(drv))
         name_box.send_keys(search_name)
         c.click_label(driver, wait, "save")
     return c.message_after(driver, action)

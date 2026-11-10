@@ -507,6 +507,7 @@ def click_near(driver, wait, anchor_text, label):
 
 def double_click_label(driver, wait, label):
     element = WebDriverWait(driver, 10).until(lambda d: find_by_label(d, label))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
     ActionChains(driver).double_click(element).perform()
 
 
@@ -1115,6 +1116,15 @@ def fill_search_meta(driver, label_text, value):
         raise SetupError(f"search form has no metadata field '{label_text}'. Fields on page: {names}")
     field.clear()
     field.send_keys(value)
+    time.sleep(1.5)
+    try:
+        WebDriverWait(driver, 5).until(lambda d: d.execute_script("return !window.jQuery || jQuery.active === 0;"))
+    except Exception:
+        pass
+    field = find(driver)
+    if field and field.get_attribute("value") != value:
+        field.clear()
+        field.send_keys(value)
 
 
 def advanced_search(driver, wait, name, include_archive=False, match_all=True, doc_type=None, extra=None, submit=True):
