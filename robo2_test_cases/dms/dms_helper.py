@@ -685,12 +685,16 @@ def bulk_submit(driver, wait, term, csv_path, files=()):
 
 
 # saved search
-def save_search(driver, wait, search_name, doc_name):
-    """Advanced search form: fill the document name, click Save Search, give the name, Save."""
+def save_search(driver, wait, search_name, info):
+    """Advanced search form: pick the doc type, give metadata, click Save Search, give the name, Save.
+    `info` is the dict returned by c.upload_document()."""
     driver.get(c.EXPLORER_URL)
-    c.click(driver, wait.until(EC.element_to_be_clickable(c.FILTER_BTN)))
-    box = wait.until(EC.visibility_of_element_located((By.ID, "docname")))
-    box.send_keys(doc_name)
+    if info["values"]:
+        # doc type + metadata of the uploaded document (steps 2 and 3 of the test case)
+        c.advanced_search(driver, wait, None, doc_type=info["doc_type"], extra=info["values"][:1], submit=False)
+    else:
+        # the doc type has no text meta-data: fall back to doc type + document name
+        c.advanced_search(driver, wait, info["name"], doc_type=info["doc_type"], submit=False)
 
     def action():
         c.click(driver, driver.find_element(By.ID, "save_search_name"))

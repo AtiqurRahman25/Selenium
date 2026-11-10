@@ -1117,8 +1117,8 @@ def fill_search_meta(driver, label_text, value):
     field.send_keys(value)
 
 
-def advanced_search(driver, wait, name, include_archive=False, match_all=True, doc_type=None, extra=None):
-    """Fill the advanced search form and submit the search."""
+def advanced_search(driver, wait, name, include_archive=False, match_all=True, doc_type=None, extra=None, submit=True):
+    """Fill the advanced search form and (unless submit=False) click Search."""
     if not visible(driver, "#dms_search_form"):
         click(driver, wait.until(EC.element_to_be_clickable(FILTER_BTN)))
     box = wait.until(EC.visibility_of_element_located((By.ID, "docname")))
@@ -1131,8 +1131,9 @@ def advanced_search(driver, wait, name, include_archive=False, match_all=True, d
     for checkbox_id, wanted in (("include_archive", include_archive), ("match_all", match_all)):
         if driver.find_element(By.ID, checkbox_id).is_selected() != wanted:
             click(driver, driver.find_element(By.CSS_SELECTOR, f"label[for='{checkbox_id}'].ts-helper"))
-    click(driver, driver.find_element(By.ID, "search_btn"))
-    time.sleep(3)
+    if submit:
+        click(driver, driver.find_element(By.ID, "search_btn"))
+        time.sleep(3)
 
 
 def advanced_finds(driver, wait, name, **options):
