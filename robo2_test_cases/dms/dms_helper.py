@@ -698,28 +698,29 @@ def save_search(driver, wait, search_name, info):
 
     def action():
         c.click(driver, driver.find_element(By.ID, "save_search_name"))
-        try:
-            name_box = WebDriverWait(driver, 4).until(lambda drv: c.modal_text_input(drv))
-        except TimeoutException:
-            driver.execute_script("$('#save_search_name').click();")
-            name_box = WebDriverWait(driver, 10).until(lambda drv: c.modal_text_input(drv))
+        name_box = WebDriverWait(driver, 10).until(lambda drv: c.modal_text_input(drv))
         name_box.send_keys(search_name)
         c.click_label(driver, wait, "save")
     return c.message_after(driver, action)
 
 
 # maker / checker
+def review_document(driver, wait, name, action):
+    """Open Pending For Review as the user who is logged in now and approve / reject the document.
+    Returns (True/False, message)."""
+    driver.get(c.REVIEW_URL)
+    if not c.wait_text(driver, name, 10):
+        return False, "document not listed for the checker"
+
+    def click_action():
+        c.click_near(driver, wait, name, action)
+        box = c.modal_text_input(driver)
+        if box is not None:
+            box.send_keys("AUTO review")
+        c.confirm_any(driver, wait)
+    return c.message_after(driver, click_action)
+
+
 def review_as_checker(driver, wait, name, action):
     """Second user opens Pending For Review and approves / rejects the document. Returns (True/False, message)."""
-    def review():
-        driver.get(c.REVIEW_URL)
-        if not c.wait_text(driver, name, 10):
-            return False, "document not listed for the checker"
-        def click_action():
-            c.click_near(driver, wait, name, action)
-            box = c.modal_text_input(driver)
-            if box is not None:
-                box.send_keys("AUTO review")
-            c.confirm_any(driver, wait)
-        return c.message_after(driver, click_action)
-    return c.as_other_user(driver, wait, review)
+    return c.as_other_user(driver, wait, lambda: review_document(driver, wait, name, action))

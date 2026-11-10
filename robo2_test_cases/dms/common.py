@@ -37,7 +37,7 @@ TESTER_NAME = os.getenv("TESTER_NAME")
 SHEET_NAME = os.getenv("SHEET_NAME", "DMS")
 SCREENSHOT_DIR = os.getenv("SCREENSHOT_DIR", "screenshots")
 DOWNLOAD_DIR = os.path.abspath(os.getenv("DOWNLOAD_DIR", "downloads"))
-DEBUG_DIR = os.path.abspath(os.getenv("DEBUG_DIR"))    
+DEBUG_DIR = os.path.abspath(os.getenv("DEBUG_DIR"))
 EVIDENCE_LINK = os.getenv("EVIDENCE_LINK")
 EVIDENCE_HEADER = os.getenv("EVIDENCE_HEADER", "remark").lower()
 HEADER_ROW = 4
@@ -632,6 +632,7 @@ def best_option_index(options, term):
             return i
     return 0
 
+
 def pick_select2(driver, wait, term, nth=0):
     """Open the nth visible Select2 dropdown, type `term`, and pick the first result."""
     boxes = visible(driver, "span.select2-selection")
@@ -776,6 +777,56 @@ def select_document_type(driver, wait, terms=None):
                 time.sleep(2)
                 return
     raise SetupError("document type could not be selected")
+
+
+def select_checker(driver, preferred_checker=None):
+    """Select a checker in #checker-div if visible on the Pending Documents upload form."""
+    checker_divs = driver.find_elements(By.ID, "checker-div")
+    if not (checker_divs and checker_divs[0].is_displayed()):
+        return False
+
+    want = (preferred_checker or os.getenv("CHECKER_NAME") or USERNAME or "").strip()
+    picked = driver.execute_script("""
+        var div = document.getElementById('checker-div');
+        if (!div || div.offsetParent === null) return '';
+        var sel = div.querySelector('select') || document.getElementById('checker');
+        if (!sel) return '';
+        var want = (arguments[0] || '').toLowerCase();
+        var chosen = null;
+        var valid = [];
+        for (var i = 0; i < sel.options.length; i++) {
+            var o = sel.options[i];
+            var txt = (o.text || '').trim();
+            if (!o.value || o.disabled || !txt || txt.toLowerCase().indexOf('select') === 0 || txt.toLowerCase() === 'none') {
+                continue;
+            }
+            valid.push(o);
+            if (want && (txt.toLowerCase() === want || txt.toLowerCase().indexOf(want) !== -1)) {
+                chosen = o;
+                break;
+            }
+        }
+        if (!chosen && valid.length > 0) {
+            chosen = valid[0];
+        }
+        if (!chosen) return '';
+        sel.value = chosen.value;
+        chosen.selected = true;
+        if (window.$) {
+            $(sel).trigger('change');
+            if ($.fn.selectpicker) { $(sel).selectpicker('refresh'); }
+        } else {
+            sel.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+        return chosen.text.trim();
+    """, want)
+
+    if not picked:
+        try:
+            picked = pick_option(driver, "checker", want)
+        except Exception:
+            picked = ""
+    return bool(picked)
 
 
 def fill_metadata_form(driver, wait, terms=None):
@@ -940,7 +991,7 @@ def attach_new_file(driver, wait, path):
     return None
 
 
-def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True):
+def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True, require_checker=False):
     """Attach a sample file, select it in the Pending list, pick Document Type, and optionally fill required metadata."""
     sample = find_sample_file(ext)
     if not sample:
@@ -965,8 +1016,21 @@ def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True):
         terms = [doc_type] if doc_type else DOC_TYPE_SEARCH_TERMS
         if fill:
             fill_metadata_form(driver, wait, terms)
-            if os.getenv("CHECKER_NAME") and driver.find_element(By.ID, "checker-div").is_displayed():
-                pick_option(driver, "checker", os.getenv("CHECKER_NAME"))
+            checker_divs = driver.find_elements(By.ID, "checker-div")
+            checker_visible = bool(checker_divs and checker_divs[0].is_displayed())
+            if require_checker and not checker_visible:
+                chosen_dt = current_doc_type(driver)
+                raise SetupError(
+                    f"Doc type '{chosen_dt}' (searched via CHECKER_DOC_TYPE={doc_type!r}) does not have a "
+                    f"Checker Group assigned (#checker-div is hidden). Set CHECKER_DOC_TYPE in .env to a "
+                    f"document type that has a Checker Group assigned."
+                )
+            if checker_visible:
+                if not select_checker(driver):
+                    raise SetupError(
+                        f"Checker dropdown (#checker-div) is shown for doc-type '{current_doc_type(driver)}', "
+                        f"but no checker could be selected."
+                    )
         else:
             select_document_type(driver, wait, terms)
             time.sleep(2)
@@ -1035,10 +1099,10 @@ def select_share(driver, kind):
     return picked
 
 
-def upload_document(driver, wait, ext="pdf", doc_type=None, share=None):
+def upload_document(driver, wait, ext="pdf", doc_type=None, share=None, require_checker=False):
     """Upload one test document with a unique name. Returns {'name', 'doc_type', 'values'}."""
     try:
-        prepare_upload(driver, wait, ext, doc_type)
+        prepare_upload(driver, wait, ext, doc_type, require_checker=require_checker)
         info = {"doc_type": current_doc_type(driver), "values": filled_values(driver)}
         if share:
             info["shared_with"] = select_share(driver, share)
