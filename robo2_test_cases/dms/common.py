@@ -37,7 +37,7 @@ TESTER_NAME = os.getenv("TESTER_NAME")
 SHEET_NAME = os.getenv("SHEET_NAME", "DMS")
 SCREENSHOT_DIR = os.getenv("SCREENSHOT_DIR", "screenshots")
 DOWNLOAD_DIR = os.path.abspath(os.getenv("DOWNLOAD_DIR", "downloads"))
-DEBUG_DIR = os.path.abspath(os.getenv("DEBUG_DIR"))
+DEBUG_DIR = os.path.abspath(os.getenv("DEBUG_DIR"))    
 EVIDENCE_LINK = os.getenv("EVIDENCE_LINK")
 EVIDENCE_HEADER = os.getenv("EVIDENCE_HEADER", "remark").lower()
 HEADER_ROW = 4
@@ -96,7 +96,7 @@ SUCCESS_WORDS = [
     "updated", "checked", "linked", "unlinked", "shared", "sent", "added", "removed",
     "published", "assigned", "cloned", "enabled", "disabled", "approved", "rejected", "downloaded",
 ]
-ERROR_WORDS = ["error", "failed", "required", "already exists", "invalid"]
+ERROR_WORDS = ["error", "failed", "required", "already exists", "invalid", "no checker"]
 
 LOWER = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ-_', 'abcdefghijklmnopqrstuvwxyz  ')"
 MODAL = (
@@ -168,12 +168,18 @@ def logout(driver):
 def as_other_user(driver, wait, function):
     """Log in as the second user, run function(), and log back in as the main user."""
     logout(driver)
-    login_as(driver, wait, OTHER_USERNAME, OTHER_PASSWORD)
+    try:
+        login_as(driver, wait, OTHER_USERNAME, OTHER_PASSWORD)
+    except SetupError as error:
+        raise SetupError(f"SECOND user (OTHER_USERNAME / OTHER_PASSWORD in .env): {error}")
     try:
         return function()
     finally:
         logout(driver)
-        login_as(driver, wait, USERNAME, PASSWORD)
+        try:
+            login_as(driver, wait, USERNAME, PASSWORD)
+        except SetupError as error:
+            raise SetupError(f"MAIN user could not log back in after the second-user step: {error}")
 
 
 def need_other_user():
@@ -632,7 +638,6 @@ def best_option_index(options, term):
             return i
     return 0
 
-
 def pick_select2(driver, wait, term, nth=0):
     """Open the nth visible Select2 dropdown, type `term`, and pick the first result."""
     boxes = visible(driver, "span.select2-selection")
@@ -797,7 +802,7 @@ def select_checker(driver, preferred_checker=None):
         for (var i = 0; i < sel.options.length; i++) {
             var o = sel.options[i];
             var txt = (o.text || '').trim();
-            if (!o.value || o.disabled || !txt || txt.toLowerCase().indexOf('select') === 0 || txt.toLowerCase() === 'none') {
+            if (!o.value || o.value === '0' || o.disabled || !txt || txt.toLowerCase().indexOf('select') === 0 || txt.toLowerCase() === 'none') {
                 continue;
             }
             valid.push(o);
@@ -813,19 +818,17 @@ def select_checker(driver, preferred_checker=None):
         sel.value = chosen.value;
         chosen.selected = true;
         if (window.$) {
+            $(sel).val(chosen.value);
             $(sel).trigger('change');
-            if ($.fn.selectpicker) { $(sel).selectpicker('refresh'); }
+            if ($.fn.selectpicker) {
+                $(sel).selectpicker('val', chosen.value);
+                $(sel).selectpicker('refresh');
+            }
         } else {
             sel.dispatchEvent(new Event('change', {bubbles: true}));
         }
         return chosen.text.trim();
     """, want)
-
-    if not picked:
-        try:
-            picked = pick_option(driver, "checker", want)
-        except Exception:
-            picked = ""
     return bool(picked)
 
 
@@ -916,10 +919,43 @@ def unique_copy(path):
     return name, new_path
 
 
+def pending_page_info(driver):
+    """('41-60', 87) from the 'Showing files X-Y of Z files' line, or ('', None) if it is not on the page."""
+    try:
+        shown = driver.find_element(By.CSS_SELECTOR, ".showing-files").text.strip()
+        total = driver.find_element(By.CSS_SELECTOR, ".total-files").text.strip()
+    except Exception:
+        return "", None
+    return shown, int(total) if total.isdigit() else None
+
+
+def pending_next_page(driver):
+    """Go to the next page of the Pending Files list. Returns False when there is no next page.
+    The Next button is disabled while a page is still loading, so wait for it instead of giving up."""
+    for _ in range(10):
+        shown, total = pending_page_info(driver)
+        last = shown.split("-")[-1].strip()
+        if total is not None and last.isdigit() and int(last) >= total:
+            return False  # already on the last page
+        more = [b for b in visible(driver, "#pagination button.next") if b.is_enabled()]
+        if more:
+            click(driver, more[0])
+            try:
+                WebDriverWait(driver, 15).until(lambda d: pending_page_info(d)[0] != shown)
+            except Exception:
+                pass
+            time.sleep(0.5)
+            return True
+        if not shown:
+            return False  # no paging info on the page and no Next button
+        time.sleep(1.5)  # Next is disabled while the list is loading
+    return False
+
+
 def pending_names(driver):
     """Return all document names across pages in the Pending Files list."""
     names, seen = [], set()
-    for _ in range(10):
+    for _ in range(30):
         page = [
             r.get_attribute("data-pending-doc-name")
             for r in driver.find_elements(By.CSS_SELECTOR, "#list_view_container tr.pending-meta")
@@ -928,11 +964,8 @@ def pending_names(driver):
             break
         seen.add(tuple(page))
         names += page
-        more = [b for b in visible(driver, "#pagination button.next") if b.is_enabled()]
-        if not more:
+        if not pending_next_page(driver):
             break
-        click(driver, more[0])
-        time.sleep(1.5)
     return names
 
 
@@ -943,17 +976,14 @@ def open_pending_list(driver, wait):
 
 
 def click_pending_icon(driver, file_name):
-    """Click the paperclip icon for `file_name` in the Pending Files list."""
-    for _ in range(10):
+    """Click the paperclip icon for `file_name` in the Pending Files list (looks through all pages)."""
+    for _ in range(30):
         icons = [i for i in driver.find_elements(*pending_row_icon(file_name)) if i.is_displayed()]
         if icons:
             click(driver, icons[0])
             return True
-        more = [b for b in visible(driver, "#pagination button.next") if b.is_enabled()]
-        if not more:
+        if not pending_next_page(driver):
             return False
-        click(driver, more[0])
-        time.sleep(1.5)
     return False
 
 
@@ -991,7 +1021,7 @@ def attach_new_file(driver, wait, path):
     return None
 
 
-def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True, require_checker=False):
+def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True):
     """Attach a sample file, select it in the Pending list, pick Document Type, and optionally fill required metadata."""
     sample = find_sample_file(ext)
     if not sample:
@@ -1009,23 +1039,17 @@ def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True, require_ch
         if selected_count(driver):
             raise SetupError("files from an earlier run are still selected in Pending Documents and could not be removed")
         if not click_pending_icon(driver, pending_name):
-            raise SetupError(f"'{pending_name}' is in the Pending Files list but its paperclip icon could not be clicked")
+            raise SetupError(f"'{pending_name}' is in the Pending Files list but its paperclip icon could not be clicked "
+                             f"(list shows files {pending_page_info(driver)[0]} of {pending_page_info(driver)[1]})")
         time.sleep(1)
         if selected_count(driver) != 1:
             raise SetupError(f"the file could not be selected for the meta-data panel. Page said: {popup_text(driver) or 'nothing'}")
         terms = [doc_type] if doc_type else DOC_TYPE_SEARCH_TERMS
         if fill:
             fill_metadata_form(driver, wait, terms)
+            time.sleep(1.5)
             checker_divs = driver.find_elements(By.ID, "checker-div")
-            checker_visible = bool(checker_divs and checker_divs[0].is_displayed())
-            if require_checker and not checker_visible:
-                chosen_dt = current_doc_type(driver)
-                raise SetupError(
-                    f"Doc type '{chosen_dt}' (searched via CHECKER_DOC_TYPE={doc_type!r}) does not have a "
-                    f"Checker Group assigned (#checker-div is hidden). Set CHECKER_DOC_TYPE in .env to a "
-                    f"document type that has a Checker Group assigned."
-                )
-            if checker_visible:
+            if checker_divs and checker_divs[0].is_displayed():
                 if not select_checker(driver):
                     raise SetupError(
                         f"Checker dropdown (#checker-div) is shown for doc-type '{current_doc_type(driver)}', "
@@ -1099,10 +1123,10 @@ def select_share(driver, kind):
     return picked
 
 
-def upload_document(driver, wait, ext="pdf", doc_type=None, share=None, require_checker=False):
+def upload_document(driver, wait, ext="pdf", doc_type=None, share=None):
     """Upload one test document with a unique name. Returns {'name', 'doc_type', 'values'}."""
     try:
-        prepare_upload(driver, wait, ext, doc_type, require_checker=require_checker)
+        prepare_upload(driver, wait, ext, doc_type)
         info = {"doc_type": current_doc_type(driver), "values": filled_values(driver)}
         if share:
             info["shared_with"] = select_share(driver, share)
@@ -1180,15 +1204,6 @@ def fill_search_meta(driver, label_text, value):
         raise SetupError(f"search form has no metadata field '{label_text}'. Fields on page: {names}")
     field.clear()
     field.send_keys(value)
-    time.sleep(1.5)
-    try:
-        WebDriverWait(driver, 5).until(lambda d: d.execute_script("return !window.jQuery || jQuery.active === 0;"))
-    except Exception:
-        pass
-    field = find(driver)
-    if field and field.get_attribute("value") != value:
-        field.clear()
-        field.send_keys(value)
 
 
 def advanced_search(driver, wait, name, include_archive=False, match_all=True, doc_type=None, extra=None, submit=True):
