@@ -38,6 +38,7 @@ def run_three_rows(test_case_id, scenarios):
         raise SystemExit(f"{test_case_id} not found in column A of sheet '{c.SHEET_NAME}'")
 
     driver, wait = c.start_browser()
+    results = []
     try:
         c.login(driver, wait)
         for idx, (label, scenario) in enumerate(scenarios):
@@ -48,6 +49,7 @@ def run_three_rows(test_case_id, scenarios):
             except c.SetupError as error:
                 ok, msg = False, str(error)
                 c.fail(driver, test_case_id, slug, str(error))
+                results.append(False)
                 break
             except Exception as error:
                 ok, msg = False, c.short(error)
@@ -59,6 +61,7 @@ def run_three_rows(test_case_id, scenarios):
                 ok, msg = c.fail(driver, test_case_id, slug, msg)
 
             status = "Pass" if ok else "Fail"
+            results.append(ok)
             print(f"{label:28} -> {status} ({msg})")
 
             # Write individual result to its respective row
@@ -81,6 +84,9 @@ def run_three_rows(test_case_id, scenarios):
         print(f"\nSaved results across 3 rows starting from row {base_row} to: {c.EXCEL_PATH}")
     finally:
         driver.quit()
+
+    if not results or not all(results):
+        raise SystemExit(1)
 
 
 def share_with(kind):

@@ -15,7 +15,6 @@ import time
 from selenium.webdriver.common.by import By
 
 import common as c
-import tc011_Multiple_Doc_Up_helper as h
 
 TEST_CASE_ID = "DMS-TC137"
 
@@ -60,7 +59,7 @@ def ocr_explorer_search(driver, wait):
     time.sleep(2)
     c.advanced_search(driver, wait, None, match_all=False, doc_type=info["doc_type"], extra=[("content search", SEARCH_TEXT)])
     time.sleep(3)
-    shown = name.lower() in h.body_text(driver)
+    shown = name.lower() in c.body_text(driver)
     return shown, f"Content search '{SEARCH_TEXT}' in My Documents " + ("shows the document" if shown else "does NOT show the document") + f" ({status_msg})"
 
 

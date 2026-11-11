@@ -18,8 +18,8 @@ DOC_TYPE = os.getenv("CHECKER_DOC_TYPE")  # a doc-type with a checker group, the
 
 
 def approve_reject(driver, wait):
-    approved = c.upload_document(driver, wait, "pdf", doc_type=DOC_TYPE)["name"]
-    rejected = c.upload_document(driver, wait, "pdf", doc_type=DOC_TYPE)["name"]
+    approved = c.upload_document(driver, wait, "pdf", doc_type=DOC_TYPE, require_checker=True)["name"]
+    rejected = c.upload_document(driver, wait, "pdf", doc_type=DOC_TYPE, require_checker=True)["name"]
 
     ok_a, msg_a = d.review_as_checker(driver, wait, approved, "approve")
     ok_r, msg_r = d.review_as_checker(driver, wait, rejected, "reject")

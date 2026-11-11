@@ -105,9 +105,13 @@ def document_name_convention(driver, wait):
     used = [v for v in values if v in name]
 
     # click Save and check the document is saved with that name
+    checker_divs = driver.find_elements(By.ID, "checker-div")
+    had_checker = bool(checker_divs and checker_divs[0].is_displayed())
     ok, message = c.message_after(driver, lambda: c.click(driver, driver.find_element(*c.UPLOAD_BTN)))
     if not ok:
         return False, f"Document name was '{name}' but Save failed ({message})"
+    if had_checker:
+        c.approve_pending_document(driver, wait, name)
     if not c.search_finds(driver, wait, name, tries=5):
         return False, f"Document saved, but not found in search with the name '{name}'"
 

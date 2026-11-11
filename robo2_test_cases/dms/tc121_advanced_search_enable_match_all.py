@@ -15,7 +15,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 import common as c
-import tc011_Multiple_Doc_Up_helper as h
 
 TEST_CASE_ID = "DMS-TC121"
 
@@ -82,7 +81,7 @@ def advanced(driver, wait):
 
     driver.get(c.EXPLORER_URL)
     run_advanced_search(driver, wait, name, match_all=True, doc_type=first["doc_type"], extra=pairs)
-    text = h.body_text(driver)
+    text = c.body_text(driver)
     found_a = first["name"].lower() in text
     found_b = second["name"].lower() in text
     ok = not found_a and not found_b

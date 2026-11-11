@@ -8,7 +8,6 @@ import os
 import time
 
 import common as c
-import tc011_Multiple_Doc_Up_helper as h
 
 TEST_CASE_ID = "DMS-TC051"
 
@@ -20,7 +19,7 @@ def permitted_only(driver, wait):
     def look():
         driver.get(c.EXPLORER_URL)
         time.sleep(4)
-        return h.body_text(driver)
+        return c.body_text(driver)
     text = c.as_other_user(driver, wait, look)
     sees_visible = VISIBLE_TYPE.lower() in text
     sees_hidden = HIDDEN_TYPE.lower() in text

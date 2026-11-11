@@ -19,7 +19,6 @@ from selenium.webdriver.support import expected_conditions as EC
 
 import common as c
 import dms_helper as d
-import tc011_Multiple_Doc_Up_helper as h
 
 TEST_CASE_ID = "DMS-TC128"
 
@@ -41,7 +40,7 @@ def listed(driver, wait, status, name):
     time.sleep(2)
     choose(driver, wait, "select-status", status)
     time.sleep(3)
-    return name.lower() in h.body_text(driver)
+    return name.lower() in c.body_text(driver)
 
 
 def statuses(driver, wait, name):
@@ -52,7 +51,7 @@ def statuses(driver, wait, name):
 def requested_by_me(driver, wait):
     # maker (second user) uploads the document and looks at "Requested By Me"
     def maker_uploads():
-        info = c.upload_document(driver, wait, "pdf", doc_type=DOC_TYPE)
+        info = c.upload_document(driver, wait, "pdf", doc_type=DOC_TYPE, require_checker=True)
         return info, statuses(driver, wait, info["name"])
 
     info, before = c.as_other_user(driver, wait, maker_uploads)

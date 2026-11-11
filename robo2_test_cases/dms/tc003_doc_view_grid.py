@@ -1,14 +1,13 @@
 """
-DMS-TC003	
-Document View in Pending Documents (Grid View)	
-"1. Go to https://ecmv6.robo2mation.com/dms/document/upload/standard_upload/filesave/pendingmetalist/
-2. Click on ""Grid View"" icon
-3. Click on ""view document"" icon (PDF, PNG, JPG, JPEG, SVG, GIF, MP3, MP4, DOC, DOCX, XLS, XLSX, CSV, PPT, PPTX, MSG, EML, TXT file)"	
+DMS-TC003
+Document View in Pending Documents (Grid View)
+1. Go to https://ecmv6.robo2mation.com/dms/document/upload/standard_upload/filesave/pendingmetalist/
+2. Click on "Grid View" icon
+3. Click on "view document" icon (PDF, PNG, JPG, JPEG, SVG, GIF, MP3, MP4, DOC, DOCX, XLS, XLSX, CSV, PPT, PPTX, MSG, EML, TXT file)
 System should allow to view the document and if give user a message if preview not available
 """
 import time
 
-from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
@@ -17,13 +16,14 @@ from selenium.webdriver.support.ui import WebDriverWait
 import common as c
 
 TEST_CASE_ID = "DMS-TC003"
-PENDING_URL = c.BASE_URL + "/dms/document/upload/standard_upload/filesave/pendingmetalist/"
 
-# locators
 LOWER = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')"
 GRID_VIEW = (By.XPATH, "//*[contains(@title,'Grid') or contains(@data-original-title,'Grid') or contains(@aria-label,'Grid')]")
-VIEW_ICON = ("[contains(" + LOWER.format("@title") + ", 'view document') or contains(" + LOWER.format("@data-original-title")
-             + ", 'view document') or contains(" + LOWER.format("@aria-label") + ", 'view document')]")
+VIEW_ICON = (
+    "[contains(" + LOWER.format("@title") + ", 'view document') or contains("
+    + LOWER.format("@data-original-title") + ", 'view document') or contains("
+    + LOWER.format("@aria-label") + ", 'view document')]"
+)
 POPUP = ".modal.show, .modal.in, [role='dialog'], .swal2-popup, .ant-modal, .mat-dialog-container, iframe, embed, video, audio"
 
 
@@ -34,46 +34,65 @@ def find_view_icon(driver, ext):
     return card.find_element(By.XPATH, f".//*{VIEW_ICON}")
 
 
+def locate_view_icon_across_pages(driver, wait, ext):
+    """Switch to Grid View and search across Pending Documents pages for a `.ext` file."""
+    for _ in range(15):
+        try:
+            return find_view_icon(driver, ext)
+        except Exception:
+            if not c.pending_next_page(driver):
+                break
+            try:
+                wait.until(EC.element_to_be_clickable(GRID_VIEW)).click()
+                time.sleep(0.5)
+            except Exception:
+                pass
+    return None
+
+
 def preview_result(driver, old_tabs):
-    """What happened after clicking the view icon? Returns text, or None if nothing happened."""
+    """Determine what happened after clicking the view icon."""
     if len(driver.window_handles) > len(old_tabs):
         return "preview opened in new tab"
     if any(e.is_displayed() for e in driver.find_elements(By.CSS_SELECTOR, POPUP)):
         return "preview opened"
-    text = driver.find_element(By.TAG_NAME, "body").text.lower()
+    text = c.body_text(driver)
     if "preview" in text and any(w in text for w in ("not available", "unavailable", "not supported")):
         return "'preview not available' message shown"
     return None
 
 
 def view_document(driver, wait, ext):
-    """Returns (True/False, message)."""
-    driver.get(PENDING_URL)
+    """View a pending document of type `ext` in Grid View. Returns (True/False, message)."""
+    driver.get(c.PENDING_URL)
     try:
         wait.until(EC.element_to_be_clickable(GRID_VIEW)).click()
-        time.sleep(1)  # let the grid load
+        time.sleep(1)
     except Exception:
         return False, "Grid View icon not found"
 
-    try:
-        icon = find_view_icon(driver, ext)
-    except Exception:
+    icon = locate_view_icon_across_pages(driver, wait, ext)
+    if icon is None:
+        sample = c.find_sample_file(ext)
+        if sample:
+            _, copy_path = c.unique_copy(sample[1])
+            c.attach_new_file(driver, wait, copy_path)
+            driver.get(c.PENDING_URL)
+            wait.until(EC.element_to_be_clickable(GRID_VIEW)).click()
+            time.sleep(1)
+            icon = locate_view_icon_across_pages(driver, wait, ext)
+    if icon is None:
         return False, f"no .{ext} document in pending list"
 
     old_tabs = driver.window_handles
     try:
-        icon.click()
+        c.click(driver, icon)
         result = WebDriverWait(driver, 8).until(lambda d: preview_result(d, old_tabs))
     except Exception:
-        c.save_shot(driver, TEST_CASE_ID, ext, "FAIL")
-        with open(f"debug/{TEST_CASE_ID}_{ext}.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        print("   page:", driver.current_url)
-        return False, "nothing happened after clicking view icon"
+        return c.fail(driver, TEST_CASE_ID, ext, "nothing happened after clicking view icon")
 
     c.save_shot(driver, TEST_CASE_ID, ext, "PASS")
 
-    # close the preview before the next file type
     if len(driver.window_handles) > len(old_tabs):
         driver.close()
         driver.switch_to.window(old_tabs[0])
@@ -85,9 +104,7 @@ def view_document(driver, wait, ext):
 def main():
     c.check_excel_ready(TEST_CASE_ID)
 
-    driver = webdriver.Chrome()
-    driver.maximize_window()
-    wait = WebDriverWait(driver, 15)
+    driver, wait = c.start_browser()
     passed, failed = [], []
 
     try:
@@ -109,6 +126,8 @@ def main():
 
     c.write_result(TEST_CASE_ID, actual, status)
     print(f"\n{TEST_CASE_ID}: {status}")
+    if status == "Fail":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

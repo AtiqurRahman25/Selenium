@@ -15,11 +15,14 @@ env/
 output/
 screenshots/
 debug/
+debug1/
 test_files/
+logs/
 
 # Temporary & Lock files
 ~$*
 
 # Test Case Trackers
 Robo2mation_26Q1_Sanity_Test_Case_Doc.xlsx
+Robo2mation_26Q1_Sanity_Test_Case_Doc2.xlsx
 downloads

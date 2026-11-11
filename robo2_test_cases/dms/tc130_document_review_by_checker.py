@@ -19,7 +19,7 @@ DOC_TYPE = os.getenv("CHECKER_DOC_TYPE")  # a doc-type with a checker group, the
 
 
 def checker_list(driver, wait):
-    info = c.upload_document(driver, wait, "pdf", doc_type=DOC_TYPE)
+    info = c.upload_document(driver, wait, "pdf", doc_type=DOC_TYPE, require_checker=True)
     name = info["name"]
 
     def look():

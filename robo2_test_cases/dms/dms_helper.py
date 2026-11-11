@@ -18,7 +18,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 import common as c
-import tc011_Multiple_Doc_Up_helper as h
 
 
 # categorization
@@ -479,10 +478,10 @@ def explorer_pages(driver, pages=3):
         buttons = [b for b in c.visible(driver, "#pagination button.next") if b.is_enabled()]
         if not buttons:
             break
-        before = h.body_text(driver)
+        before = c.body_text(driver)
         c.click(driver, buttons[0])
         time.sleep(2)
-        if h.body_text(driver) == before:
+        if c.body_text(driver) == before:
             break
     return items
 
@@ -685,9 +684,48 @@ def bulk_submit(driver, wait, term, csv_path, files=()):
 
 
 # saved search
+SAVED_SEARCH_LIMIT = 5  # the server answers "You can only add 5 items" once a user has 5 saved searches
+
+
+def open_saved_search_list(driver, wait):
+    """Open Explorer > advanced search > Saved Search list and wait for it to load. Returns the row elements."""
+    driver.get(c.EXPLORER_URL)
+    if not c.visible(driver, "#dms_search_form"):
+        c.click(driver, wait.until(EC.element_to_be_clickable(c.FILTER_BTN)))
+    c.click(driver, wait.until(EC.element_to_be_clickable((By.ID, "saved_search"))))
+    WebDriverWait(driver, 15).until(
+        lambda drv: c.visible(drv, "#seved_search_modal .saved_tr") or c.visible(drv, "#seved_search_modal .save_search_no_data")
+    )
+    return c.visible(driver, "#seved_search_modal .saved_tr")
+
+
+def free_saved_search_slot(driver, wait, prefix="AUTO_SEARCH_"):
+    """Delete old saved searches made by these tests (names starting with `prefix`) so a new one can be saved."""
+    rows = open_saved_search_list(driver, wait)
+    count = len(rows)
+    for _ in range(count):
+        if count < SAVED_SEARCH_LIMIT:
+            break
+        auto_rows = [r for r in c.visible(driver, "#seved_search_modal .saved_tr") if r.text.strip().startswith(prefix)]
+        if not auto_rows:
+            raise c.SetupError(
+                f"{count} saved searches exist (limit {SAVED_SEARCH_LIMIT}) and none of them is an {prefix}* test search to delete"
+            )
+        row_id = auto_rows[0].get_attribute("data-id")
+        c.click(driver, auto_rows[0].find_element(By.CSS_SELECTOR, ".delete_save_search"))
+        if not c.confirm(driver, wait, "yes"):
+            raise c.SetupError("delete confirmation for an old saved search did not appear")
+        WebDriverWait(driver, 15).until(
+            lambda drv: not drv.find_elements(By.CSS_SELECTOR, f"#seved_search_modal .saved_tr[data-id='{row_id}'] td")
+        )
+        count -= 1
+        time.sleep(1)
+
+
 def save_search(driver, wait, search_name, info):
     """Advanced search form: pick the doc type, give metadata, click Save Search, give the name, Save.
     `info` is the dict returned by c.upload_document()."""
+    free_saved_search_slot(driver, wait)
     driver.get(c.EXPLORER_URL)
     if info["values"]:
         # doc type + metadata of the uploaded document (steps 2 and 3 of the test case)

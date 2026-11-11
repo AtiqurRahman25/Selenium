@@ -18,7 +18,6 @@ from selenium.webdriver.support import expected_conditions as EC
 
 import common as c
 import dms_helper as d
-import tc011_Multiple_Doc_Up_helper as h
 
 TEST_CASE_ID = "DMS-TC091"
 BUILDER = "doc_uniqueness_condition_builder"
@@ -161,7 +160,7 @@ def upload_values(driver, wait, doc_type, values):
     for label, value in values.items():
         c.fill_field(driver, label, value)
     c.set_document_name(driver, datetime.now().strftime("AUTO_%H%M%S%f"))
-    return c.message_after(driver, lambda: c.click(driver, driver.find_element(*h.UPLOAD_BTN)))
+    return c.message_after(driver, lambda: c.click(driver, driver.find_element(*c.UPLOAD_BTN)))
 
 
 def unique_or(driver, wait):

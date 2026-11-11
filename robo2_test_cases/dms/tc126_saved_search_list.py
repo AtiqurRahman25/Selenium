@@ -16,7 +16,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 import common as c
 import dms_helper as d
-import tc011_Multiple_Doc_Up_helper as h
 
 TEST_CASE_ID = "DMS-TC126"
 
@@ -34,10 +33,8 @@ def saved_search_list(driver, wait):
     if not ok:
         raise c.SetupError(f"could not save the search ({message})")
 
-    driver.get(c.EXPLORER_URL)
-    c.click(driver, wait.until(EC.element_to_be_clickable(c.FILTER_BTN)))
-    c.click(driver, wait.until(EC.element_to_be_clickable((By.ID, "saved_search"))))  # saved search list
-    time.sleep(2)
+    d.open_saved_search_list(driver, wait)  # saved search list (rows are loaded by AJAX)
+    time.sleep(1)
     c.double_click_label(driver, wait, search_name)
     time.sleep(2)
 

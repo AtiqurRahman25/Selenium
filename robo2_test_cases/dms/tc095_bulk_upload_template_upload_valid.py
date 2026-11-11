@@ -14,7 +14,6 @@ from datetime import datetime
 
 import common as c
 import dms_helper as d
-import tc011_Multiple_Doc_Up_helper as h
 
 TEST_CASE_ID = "DMS-TC095"
 
@@ -45,7 +44,7 @@ def bulk_upload(driver, wait):
     csv_path = d.write_csv(os.path.join(c.DOWNLOAD_DIR, "AUTO_bulk.csv"), header, rows)
     ok, message = d.bulk_submit(driver, wait, doc_type, csv_path, files)
     time.sleep(5)
-    report_error = "error" in h.body_text(driver)
+    report_error = "error" in c.body_text(driver)
     return ok and not report_error, f"{message}. " + ("Upload record shows an error" if report_error else "No error shown")
 
 

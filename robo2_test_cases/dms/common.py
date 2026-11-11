@@ -23,7 +23,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # config (from .env)
 BASE_URL = os.getenv("BASE_URL")
@@ -32,12 +32,12 @@ PASSWORD = os.getenv("DMS_PASSWORD")
 OTHER_USERNAME = os.getenv("OTHER_USERNAME")
 OTHER_PASSWORD = os.getenv("OTHER_PASSWORD")
 EXCEL_PATH = os.getenv("EXCEL_PATH")
-SAMPLE_DIR = os.getenv("SAMPLE_DIR")
+SAMPLE_DIR = os.getenv("SAMPLE_DIR", "test_files")
 TESTER_NAME = os.getenv("TESTER_NAME")
 SHEET_NAME = os.getenv("SHEET_NAME", "DMS")
 SCREENSHOT_DIR = os.getenv("SCREENSHOT_DIR", "screenshots")
 DOWNLOAD_DIR = os.path.abspath(os.getenv("DOWNLOAD_DIR", "downloads"))
-DEBUG_DIR = os.path.abspath(os.getenv("DEBUG_DIR"))    
+DEBUG_DIR = os.path.abspath(os.getenv("DEBUG_DIR", "debug"))
 EVIDENCE_LINK = os.getenv("EVIDENCE_LINK")
 EVIDENCE_HEADER = os.getenv("EVIDENCE_HEADER", "remark").lower()
 HEADER_ROW = 4
@@ -96,7 +96,7 @@ SUCCESS_WORDS = [
     "updated", "checked", "linked", "unlinked", "shared", "sent", "added", "removed",
     "published", "assigned", "cloned", "enabled", "disabled", "approved", "rejected", "downloaded",
 ]
-ERROR_WORDS = ["error", "failed", "required", "already exists", "invalid", "no checker"]
+ERROR_WORDS = ["error", "failed", "required", "already exists", "invalid", "no checker", "you can only"]
 
 LOWER = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ-_', 'abcdefghijklmnopqrstuvwxyz  ')"
 MODAL = (
@@ -302,7 +302,12 @@ def xpath_text(text):
 
 
 def body_text(driver):
-    return driver.find_element(By.TAG_NAME, "body").text.lower()
+    for _ in range(3):
+        try:
+            return driver.find_element(By.TAG_NAME, "body").text.lower()
+        except StaleElementReferenceException:
+            time.sleep(0.2)
+    return ""
 
 
 def clean(text):
@@ -310,7 +315,14 @@ def clean(text):
 
 
 def visible(driver, css):
-    return [e for e in driver.find_elements(By.CSS_SELECTOR, css) if e.is_displayed()]
+    result = []
+    for e in driver.find_elements(By.CSS_SELECTOR, css):
+        try:
+            if e.is_displayed():
+                result.append(e)
+        except StaleElementReferenceException:
+            continue
+    return result
 
 
 def short(error):
@@ -332,20 +344,30 @@ def short(error):
 
 # messages & notifications
 def popup_text(driver):
-    boxes = [
-        e.text.strip() for e in driver.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
-        if e.is_displayed() and e.text.strip()
-    ]
+    boxes = []
+    for e in driver.find_elements(By.CSS_SELECTOR, MESSAGE_BOX):
+        try:
+            if e.is_displayed():
+                txt = e.text.strip()
+                if txt:
+                    boxes.append(txt)
+        except StaleElementReferenceException:
+            continue
     return " | ".join(boxes)
 
 
 def wait_for_message(driver, text_before, seconds=20):
     """Wait for a new success/error message. Returns (is_success, message)."""
     def new_message(d):
-        boxes = [
-            e.text.strip() for e in d.find_elements(By.CSS_SELECTOR, MESSAGE_BOX)
-            if e.is_displayed() and e.text.strip()
-        ]
+        boxes = []
+        for e in d.find_elements(By.CSS_SELECTOR, MESSAGE_BOX):
+            try:
+                if e.is_displayed():
+                    txt = e.text.strip()
+                    if txt:
+                        boxes.append(txt)
+            except StaleElementReferenceException:
+                continue
         try:
             saved = d.execute_script("return sessionStorage.getItem('__last_notify_msg') || '';")
         except Exception:
@@ -358,7 +380,9 @@ def wait_for_message(driver, text_before, seconds=20):
                     return word, (boxes[0] if boxes else word)
         return None
 
-    word, msg = WebDriverWait(driver, seconds).until(new_message)
+    word, msg = WebDriverWait(
+        driver, seconds, ignored_exceptions=(NoSuchElementException, StaleElementReferenceException)
+    ).until(new_message)
     try:
         driver.execute_script("sessionStorage.removeItem('__last_notify_msg');")
     except Exception:
@@ -466,11 +490,20 @@ def find_by_label(driver, label, root=None, slack=25):
     scopes = [None] if root is not None else [MODAL, ""]
     for scope in scopes:
         for exact in (True, False):
-            if root is not None:
-                found = root.find_elements(By.XPATH, f".//*[{CLICKABLE}]{predicate(label, exact)}")
-            else:
-                found = driver.find_elements(By.XPATH, f"{scope}//*[{CLICKABLE}]{predicate(label, exact)}")
-            found = [e for e in found if e.is_displayed() and len(e.text.strip()) <= len(label) + slack]
+            try:
+                if root is not None:
+                    candidates = root.find_elements(By.XPATH, f".//*[{CLICKABLE}]{predicate(label, exact)}")
+                else:
+                    candidates = driver.find_elements(By.XPATH, f"{scope}//*[{CLICKABLE}]{predicate(label, exact)}")
+            except StaleElementReferenceException:
+                continue
+            found = []
+            for e in candidates:
+                try:
+                    if e.is_displayed() and len(e.text.strip()) <= len(label) + slack:
+                        found.append(e)
+                except StaleElementReferenceException:
+                    continue
             if found:
                 return found[0]
     return None
@@ -478,14 +511,14 @@ def find_by_label(driver, label, root=None, slack=25):
 
 def find_near(driver, anchor_text, label):
     """Find the button or icon `label` in the same row, card, or section as `anchor_text`."""
-    anchor = find_by_label(driver, anchor_text, slack=300)
-    if anchor is None:
-        return None
     try:
+        anchor = find_by_label(driver, anchor_text, slack=300)
+        if anchor is None:
+            return None
         container = anchor.find_element(By.XPATH, f"ancestor::*[.//*[{CLICKABLE}]{predicate(label, False)}][1]")
-    except NoSuchElementException:
+        return find_by_label(driver, label, root=container)
+    except (NoSuchElementException, StaleElementReferenceException):
         return None
-    return find_by_label(driver, label, root=container)
 
 
 def click(driver, element):
@@ -497,46 +530,82 @@ def click(driver, element):
 
 
 def click_label(driver, wait, label, slack=25):
-    element = WebDriverWait(driver, 10).until(lambda d: find_by_label(d, label, slack=slack))
-    action = element.get_attribute("data-action") or ""
-    click(driver, element)
-    if action == "editMeta":
-        time.sleep(2)
-    return element
+    for attempt in range(3):
+        try:
+            element = WebDriverWait(
+                driver, 10, ignored_exceptions=(NoSuchElementException, StaleElementReferenceException)
+            ).until(lambda d: find_by_label(d, label, slack=slack))
+            action = element.get_attribute("data-action") or ""
+            click(driver, element)
+            if action == "editMeta":
+                time.sleep(2)
+            return element
+        except StaleElementReferenceException:
+            if attempt == 2:
+                raise
+            time.sleep(0.5)
 
 
 def click_near(driver, wait, anchor_text, label):
-    element = WebDriverWait(driver, 10).until(lambda d: find_near(d, anchor_text, label))
-    click(driver, element)
-    return element
+    for attempt in range(3):
+        try:
+            element = WebDriverWait(
+                driver, 10, ignored_exceptions=(NoSuchElementException, StaleElementReferenceException)
+            ).until(lambda d: find_near(d, anchor_text, label))
+            click(driver, element)
+            return element
+        except StaleElementReferenceException:
+            if attempt == 2:
+                raise
+            time.sleep(0.5)
 
 
 def double_click_label(driver, wait, label):
-    element = WebDriverWait(driver, 10).until(lambda d: find_by_label(d, label))
-    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-    ActionChains(driver).double_click(element).perform()
+    for attempt in range(3):
+        try:
+            element = WebDriverWait(
+                driver, 10, ignored_exceptions=(NoSuchElementException, StaleElementReferenceException)
+            ).until(lambda d: find_by_label(d, label))
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            ActionChains(driver).double_click(element).perform()
+            return
+        except StaleElementReferenceException:
+            if attempt == 2:
+                raise
+            time.sleep(0.5)
 
 
 def confirm(driver, wait, label="yes", seconds=15):
     """Click the confirmation button in a SweetAlert or Bootstrap modal. Returns False if none appeared."""
     def shown_button(d):
         for b in d.find_elements(By.CSS_SELECTOR, ".swal2-confirm, .swal2-modal button, .modal.in button, .modal.show button"):
-            if b.is_displayed() and (label in b.text.lower() or "swal2-confirm" in (b.get_attribute("class") or "")):
-                return b
+            try:
+                if b.is_displayed() and (label in b.text.lower() or "swal2-confirm" in (b.get_attribute("class") or "")):
+                    return b
+            except StaleElementReferenceException:
+                continue
         return None
 
     def enabled_button(d):
         b = shown_button(d)
-        if not (b and b.is_enabled() and "disabled" not in (b.get_attribute("class") or "").lower()):
+        try:
+            if not (b and b.is_enabled() and "disabled" not in (b.get_attribute("class") or "").lower()):
+                return None
+            bars = [p for p in d.find_elements(By.ID, "progressBar") if p.is_displayed()]
+            if bars and bars[0].get_attribute("value") != bars[0].get_attribute("max"):
+                return None
+            return b
+        except StaleElementReferenceException:
             return None
-        bars = [p for p in d.find_elements(By.ID, "progressBar") if p.is_displayed()]
-        if bars and bars[0].get_attribute("value") != bars[0].get_attribute("max"):
-            return None
-        return b
 
     try:
-        WebDriverWait(driver, min(seconds, 5)).until(shown_button)
-        click(driver, WebDriverWait(driver, seconds).until(enabled_button))
+        WebDriverWait(
+            driver, min(seconds, 5), ignored_exceptions=(NoSuchElementException, StaleElementReferenceException)
+        ).until(shown_button)
+        btn = WebDriverWait(
+            driver, seconds, ignored_exceptions=(NoSuchElementException, StaleElementReferenceException)
+        ).until(enabled_button)
+        click(driver, btn)
         return True
     except Exception:
         return False
@@ -1021,7 +1090,7 @@ def attach_new_file(driver, wait, path):
     return None
 
 
-def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True):
+def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True, require_checker=False):
     """Attach a sample file, select it in the Pending list, pick Document Type, and optionally fill required metadata."""
     sample = find_sample_file(ext)
     if not sample:
@@ -1049,7 +1118,14 @@ def prepare_upload(driver, wait, ext="pdf", doc_type=None, fill=True):
             fill_metadata_form(driver, wait, terms)
             time.sleep(1.5)
             checker_divs = driver.find_elements(By.ID, "checker-div")
-            if checker_divs and checker_divs[0].is_displayed():
+            checker_visible = bool(checker_divs and checker_divs[0].is_displayed())
+            if require_checker and not checker_visible:
+                chosen_dt = current_doc_type(driver)
+                raise SetupError(
+                    f"Doc type '{chosen_dt}' (searched via CHECKER_DOC_TYPE={doc_type!r}) does not have a "
+                    f"Checker Group assigned (#checker-div is hidden)."
+                )
+            if checker_visible:
                 if not select_checker(driver):
                     raise SetupError(
                         f"Checker dropdown (#checker-div) is shown for doc-type '{current_doc_type(driver)}', "
@@ -1123,13 +1199,31 @@ def select_share(driver, kind):
     return picked
 
 
-def upload_document(driver, wait, ext="pdf", doc_type=None, share=None):
+def approve_pending_document(driver, wait, name):
+    """Approve `name` on the Pending For Review page so it becomes searchable."""
+    driver.get(REVIEW_URL)
+    if not wait_text(driver, name, 10):
+        return False, "document not listed for the checker"
+
+    def click_approve():
+        click_near(driver, wait, name, "approve")
+        box = modal_text_input(driver)
+        if box is not None:
+            box.send_keys("AUTO review")
+        confirm_any(driver, wait)
+
+    return message_after(driver, click_approve)
+
+
+def upload_document(driver, wait, ext="pdf", doc_type=None, share=None, require_checker=False):
     """Upload one test document with a unique name. Returns {'name', 'doc_type', 'values'}."""
     try:
-        prepare_upload(driver, wait, ext, doc_type)
+        prepare_upload(driver, wait, ext, doc_type, require_checker=require_checker)
         info = {"doc_type": current_doc_type(driver), "values": filled_values(driver)}
         if share:
             info["shared_with"] = select_share(driver, share)
+        checker_divs = driver.find_elements(By.ID, "checker-div")
+        had_checker = bool(checker_divs and checker_divs[0].is_displayed())
         info["name"] = set_document_name(driver, datetime.now().strftime("AUTO_%H%M%S"))
         text_before = body_text(driver)
         click(driver, driver.find_element(*UPLOAD_BTN))
@@ -1141,6 +1235,11 @@ def upload_document(driver, wait, ext="pdf", doc_type=None, share=None):
     if not ok:
         raise SetupError(f"test document did not upload ({message})")
     time.sleep(2)
+    if had_checker and not require_checker:
+        ok_app, msg_app = approve_pending_document(driver, wait, info["name"])
+        if not ok_app:
+            raise SetupError(f"test document uploaded to checker doc-type but could not be approved ({msg_app})")
+        time.sleep(2)
     return info
 
 
@@ -1152,10 +1251,13 @@ def search_finds(driver, wait, name, tries=1):
         box = wait.until(EC.element_to_be_clickable(SEARCH_BOX))
         box.clear()
         box.send_keys(name)
-        time.sleep(3)
-        if name in driver.find_element(*SEARCH_RESULTS).text:
+        try:
+            WebDriverWait(driver, 10, ignored_exceptions=(StaleElementReferenceException,)).until(
+                lambda d: name in d.find_element(*SEARCH_RESULTS).text
+            )
             return True
-        time.sleep(3)
+        except TimeoutException:
+            pass  # not indexed yet, reload and try again
     return False
 
 
@@ -1169,9 +1271,17 @@ def open_document(driver, wait, name):
     if not search_finds(driver, wait, name, tries=5):
         raise SetupError(f"document '{name}' not found in quick search")
     old_tabs = driver.window_handles
-    row = driver.find_element(By.XPATH, f"//*[@id='search_result_list_group']//a[contains(., {xpath_text(name)})]")
-    open_btns = row.find_elements(By.CSS_SELECTOR, ".openInNew")
-    click(driver, open_btns[0] if open_btns else row)
+
+    def find_and_click(d):
+        rows = d.find_elements(By.XPATH, f"//*[@id='search_result_list_group']//a[contains(., {xpath_text(name)})]")
+        if not rows:
+            return False
+        row = rows[0]
+        open_btns = row.find_elements(By.CSS_SELECTOR, ".openInNew")
+        click(d, open_btns[0] if open_btns else row)
+        return True
+
+    WebDriverWait(driver, 10, ignored_exceptions=(StaleElementReferenceException,)).until(find_and_click)
     time.sleep(3)
     switch_to_new_tab(driver, old_tabs)
 
@@ -1197,13 +1307,40 @@ def fill_search_meta(driver, label_text, value):
                         return inputs[0]
         return None
 
+    def wait_field():
+        return WebDriverWait(driver, 10, ignored_exceptions=(StaleElementReferenceException,)).until(find)
+
     try:
-        field = WebDriverWait(driver, 10).until(find)
+        wait_field()
     except TimeoutException:
         names = [clean(l.text) for l in driver.find_elements(By.CSS_SELECTOR, "#dms_search_form .meta-data-wrap .fg-line")]
         raise SetupError(f"search form has no metadata field '{label_text}'. Fields on page: {names}")
-    field.clear()
-    field.send_keys(value)
+    # choosing the doc type re-renders the metadata fields by AJAX, which can replace the field while we type
+    # or wipe a value typed too early: look the field up again each time and type once more if the value is gone
+    for _ in range(5):
+        try:
+            field = wait_field()
+            if field.get_attribute("value") != value:
+                field.clear()
+                field.send_keys(value)
+            time.sleep(1)
+            if wait_field().get_attribute("value") == value:
+                return
+        except StaleElementReferenceException:
+            time.sleep(0.5)
+    raise SetupError(f"metadata field '{label_text}' in the search form does not keep the value '{value}'")
+
+
+def wait_search_meta_rebuilt(driver, old_wrap_children, seconds=5):
+    """After choosing a doc type, give the AJAX time to replace the old metadata fields of the search form."""
+    if not old_wrap_children:
+        time.sleep(1)
+        return
+    try:
+        WebDriverWait(driver, seconds).until(EC.staleness_of(old_wrap_children[0]))
+    except TimeoutException:
+        pass  # fields were not re-rendered (same doc type) - nothing to wait for
+    time.sleep(0.5)
 
 
 def advanced_search(driver, wait, name, include_archive=False, match_all=True, doc_type=None, extra=None, submit=True):
@@ -1214,7 +1351,9 @@ def advanced_search(driver, wait, name, include_archive=False, match_all=True, d
     box.clear()
     box.send_keys(name or "")
     if doc_type:
+        old_meta = driver.find_elements(By.CSS_SELECTOR, "#dms_search_form .meta-data-wrap .fg-line")
         pick_select2_by_id(driver, wait, "documentType", doc_type)
+        wait_search_meta_rebuilt(driver, old_meta)
     for field_label, value in (extra or []):
         fill_search_meta(driver, field_label, value)
     for checkbox_id, wanted in (("include_archive", include_archive), ("match_all", match_all)):
@@ -1250,24 +1389,28 @@ def explorer_has(driver, wait, doc_type, name):
     except Exception:
         pass
 
-    anchors = driver.find_elements(
-        By.XPATH,
-        f"//a[contains(@class, 'jstree-anchor') and normalize-space(.)={xpath_text(leaf)}]"
-    )
-    if not anchors:
-        anchors = driver.find_elements(
-            By.XPATH,
-            f"//a[contains(@class, 'jstree-anchor') and contains(normalize-space(.), {xpath_text(leaf)} )]"
-        )
-    if anchors:
-        click(driver, anchors[0])
+    for _ in range(3):
         try:
-            ActionChains(driver).double_click(anchors[0]).perform()
-        except Exception:
-            pass
-    else:
-        try:
-            click_label(driver, wait, leaf)
+            anchors = driver.find_elements(
+                By.XPATH,
+                f"//a[contains(@class, 'jstree-anchor') and normalize-space(.)={xpath_text(leaf)}]"
+            )
+            if not anchors:
+                anchors = driver.find_elements(
+                    By.XPATH,
+                    f"//a[contains(@class, 'jstree-anchor') and contains(normalize-space(.), {xpath_text(leaf)} )]"
+                )
+            if anchors:
+                click(driver, anchors[0])
+                try:
+                    ActionChains(driver).double_click(anchors[0]).perform()
+                except Exception:
+                    pass
+            else:
+                click_label(driver, wait, leaf)
+            break
+        except StaleElementReferenceException:
+            time.sleep(1)
         except Exception:
             return False
 
@@ -1366,7 +1509,9 @@ def start_browser():
     )
     driver = webdriver.Chrome(options=options)
     driver.maximize_window()
-    return driver, WebDriverWait(driver, 15)
+    return driver, WebDriverWait(
+        driver, 15, ignored_exceptions=(NoSuchElementException, StaleElementReferenceException)
+    )
 
 
 def run(test_case_id, scenarios):
@@ -1408,7 +1553,5 @@ def run(test_case_id, scenarios):
 
     write_result(test_case_id, actual, status)
     print(f"\n{test_case_id}: {status}")
-
-    write_result(test_case_id, actual, status)
     if status == "Fail":
         raise SystemExit(1)

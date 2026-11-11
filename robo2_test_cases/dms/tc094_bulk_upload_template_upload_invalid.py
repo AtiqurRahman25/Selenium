@@ -10,7 +10,6 @@ import os
 
 import common as c
 import dms_helper as d
-import tc011_Multiple_Doc_Up_helper as h
 
 TEST_CASE_ID = "DMS-TC094"
 
@@ -24,7 +23,7 @@ def rejected(label, make_file):
         header = d.template_header(template)
         path = make_file(header)
         ok, message = d.bulk_submit(driver, wait, DOC_TYPE, path)
-        error_shown = (not ok) or "error" in h.body_text(driver)
+        error_shown = (not ok) or "error" in c.body_text(driver)
         return error_shown, f"{label} file " + (f"was rejected: {message}" if error_shown else f"was ACCEPTED: {message}")
     return scenario
 
