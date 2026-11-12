@@ -1,4 +1,4 @@
-# Selenium Test Automation Suite
+# Selenium Test Automation Suite.
 
 A professional Selenium automation portfolio demonstrating real-world QA engineering skills — including web scraping, login validation, and document management system (DMS) testing — with clean, maintainable Python code and automated Excel test reporting.
 
